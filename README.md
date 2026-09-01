@@ -17,6 +17,13 @@ examples use models implemented in [MLX Swift LM](https://github.com/ml-explore/
 
 - [MLXChatExample](Applications/MLXChatExample/README.md): An example chat app that runs on both iOS and macOS that supports LLMs and VLMs.
 
+- [ShakespeareReader](Applications/ShakespeareReader/README.md): An example that runs
+  on macOS, iPhone and iPad and annotates Shakespeare on-device. Select lines in a play
+  and a 4B LLM glosses them, then offers follow-up questions on the same conversation.
+  Shows how to assemble a rich prompt from local context and how to keep one
+  `ChatSession` alive across a multi-turn exchange; the corpus ships with the app, so
+  after the model download there are no network calls.
+
 - [LoRATrainingExample](Applications/LoRATrainingExample/README.md): An example that runs on macOS that downloads an LLM and fine-tunes it using LoRA (Low-Rank Adaptation) with training data.
 
 - [LinearModelTraining](Tools/LinearModelTraining/README.md): An example that
