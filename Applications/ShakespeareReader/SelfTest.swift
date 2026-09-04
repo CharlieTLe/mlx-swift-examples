@@ -508,13 +508,82 @@ enum SelfTest {
 
         // MARK: Corpus-wide invariants
 
+        // MARK: `&c.` read as `etc.`
+
+        // The one substitution here that changes the line's *length*, which is why it
+        // lives in the same walk as the underscore strip rather than on top of it.
+        if let hamletV = scene("hamlet", 5, 1) {
+            guard
+                let procession = hamletV.lines.firstIndex(where: {
+                    $0.text.hasPrefix("Enter priests")
+                })
+            else {
+                log.fail("Hamlet V.i's funeral procession not found")
+                return
+            }
+            log.equal(
+                hamletV.lines[procession].plainText,
+                "Enter priests, etc., in procession; the corpse of Ophelia, Laertes and "
+                    + "Mourners following; King, Queen, their Trains, etc.",
+                "both abbreviations of Hamlet V.i's procession")
+        }
+
+        // In a speech line, and inside an italic span that has to stay aligned to it:
+        // `&c.` is three characters and `etc.` is four, so a span measured against the
+        // unexpanded text would fall one unit short of the line it is drawn on.
+        if let hamletIIii = scene("hamlet", 2, 2) {
+            guard
+                let letter = hamletIIii.lines.firstIndex(where: {
+                    $0.text.contains("in her excellent white bosom")
+                })
+            else {
+                log.fail("Ophelia's address line not found in Hamlet II.ii")
+                return
+            }
+            let text = hamletIIii.lines[letter].plainText
+            log.equal(
+                text, "these; in her excellent white bosom, these, etc.",
+                "the letter's address line")
+            log.equal(
+                hamletIIii.italics[letter], [0 ..< text.utf16.count],
+                "the span over the address line still covers all of it")
+        }
+
+        // A bare ampersand is not the abbreviation. These two joint speech headings sit
+        // in speech text because the parser does not recognise the `&` form, and
+        // expanding them would read `PRINCE etc. POINS.`
+        if let henry = scene("henry-iv-part-2", 2, 4) {
+            log.check(
+                henry.lines.contains { $0.plainText == "PRINCE & POINS." },
+                "a bare ampersand was expanded")
+        }
+
+        // The two places the abbreviation appears outside a line, normalized at the
+        // decode boundary so no consumer has to remember to.
+        log.equal(
+            corpus.scene(SceneKey(playID: "titus-andronicus", act: 5, scene: 3))?.setting,
+            "Rome. A Pavilion in Titus’s Gardens, with tables, etc.",
+            "the one scene setting that abbreviates")
+        log.check(
+            corpus.play("othello")?.personae.contains { $0.blurb.hasSuffix("etc.") }
+                ?? false,
+            "no Othello persona blurb ends in the expanded abbreviation")
+
         // The `wordTokenizer` tiling invariant, transposed onto spans: this is what
         // catches an off-by-one in the pairing, across all 35 plays rather than in the
         // five passages above.
         for play in corpus.plays {
+            for persona in play.personae {
+                log.check(
+                    !persona.blurb.contains("&c"),
+                    "\(play.id): an unexpanded &c in \(persona.name)'s blurb")
+            }
             for act in play.acts {
                 for scene in act.scenes {
                     let label = "\(play.id) \(act.number).\(scene.number)"
+                    log.check(
+                        !scene.setting.contains("&c"),
+                        "\(label): an unexpanded &c in the setting")
                     let spans = GutenbergMarkup.italics(in: scene.lines)
                     log.equal(
                         spans.count, scene.lines.count, "\(label): one entry per line")
@@ -525,12 +594,9 @@ enum SelfTest {
                         log.check(
                             !text.contains("_"),
                             "\(label) line \(index): an underscore survived in \"\(text)\"")
-                        // The two strippers have to agree, because the spans are measured
-                        // against the one and drawn against the other.
-                        log.equal(
-                            GutenbergMarkup.strip(line.text),
-                            String(line.text.filter { $0 != "_" }),
-                            "\(label) line \(index): the strippers disagree")
+                        log.check(
+                            !text.contains("&c"),
+                            "\(label) line \(index): an unexpanded &c in \"\(text)\"")
 
                         var cursor = 0
                         for span in spans[index] {

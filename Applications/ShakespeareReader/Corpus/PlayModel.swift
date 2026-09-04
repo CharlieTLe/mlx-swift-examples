@@ -66,6 +66,37 @@ struct Scene: Codable, Sendable, Hashable {
     var speechLineCount: Int { lines.count { $0.kind == .speech } }
 }
 
+/// `setting` and `blurb` carry the transcription's markup too — Titus V.iii is set
+/// `Rome. A Pavilion in Titus's Gardens, with tables, &c.`, and six plays' personae
+/// blurbs end `Attendants, &c` — but neither has a consumer that wants the raw form,
+/// the way `Line.text` has `OnStageTracker`. Normalizing them at the decode boundary is
+/// therefore what keeps the navigator, the scene heading, the find field and the prompt
+/// from each having to remember to do it, and from disagreeing about whether they did.
+///
+/// In an extension, so the memberwise initializer `SelfTest` builds its fixture scene
+/// with survives.
+extension Scene {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            number: try container.decode(Int.self, forKey: .number),
+            setting: GutenbergMarkup.strip(
+                try container.decode(String.self, forKey: .setting)),
+            lines: try container.decode([Line].self, forKey: .lines))
+    }
+}
+
+extension Persona {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            name: try container.decode(String.self, forKey: .name),
+            display: try container.decode(String.self, forKey: .display),
+            blurb: GutenbergMarkup.strip(try container.decode(String.self, forKey: .blurb)),
+            aliases: try container.decode([String].self, forKey: .aliases))
+    }
+}
+
 /// One rendered line: either a verse/prose line of a speech, or a stage direction.
 ///
 /// The speaker is repeated on every speech line so a single line is

@@ -42,7 +42,12 @@ enum Prompts {
     /// the shape of the blocks: the Hamlet V.i annotation opened by transcribing the
     /// passage as `First Clown: …`, which is what the "never mention the context"
     /// rule below exists to prevent.
-    static let version = 5
+    ///
+    /// 6: `&c.` is now read as `etc.` — 31 lines across 15 plays, one scene setting and
+    /// six personae blurbs. A corpus re-parse this is the only lever for, exactly as 3
+    /// was: the rendered text changed, so a cached annotation was written about a
+    /// passage that read `Enter priests, &c, in procession`.
+    static let version = 6
 
     // MARK: - Annotation
 

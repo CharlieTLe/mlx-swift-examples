@@ -227,6 +227,18 @@ underscores into spans, one speech block at a time, so the span that opens on th
 line of Ophelia's letter and closes eight lines later on `HAMLET._` is drawn as one
 italic passage instead of reaching the reader — and the model — as underscores.
 
+`GutenbergMarkup` also reads **`&c.` as `etc.`** — 31 lines across 15 plays, plus one
+scene setting and six personae blurbs, mostly entrances meaning "and others"
+(`Enter priests, &c, in procession`). That one is a *modernization* rather than a strip,
+since unlike the underscores and the brackets it is the edition's own text, and it is
+why the strip is a single walk over the line: `&c.` is three characters and `etc.` is
+four, so a span measured against the unexpanded text would slide one unit off the string
+it is drawn on. A bare ampersand is left alone, which keeps the two joint speech headings
+the parser files as speech text, `PRINCE & POINS.` and `GLOUCESTER & CLARENCE.`, from
+reading `PRINCE etc. POINS.` The setting and the blurbs are normalized at the decode
+boundary, since neither has a consumer wanting the raw form the way `Line.text` has
+`OnStageTracker`.
+
 Divergences worth knowing about before they look like bugs:
 
 - **`FoundationModelsIntegration` is on.** An Xcode project has no way to express a
@@ -613,8 +625,9 @@ five passages that decide `GutenbergMarkup` (a span inside one line, a span that
 not eat the brackets of a mid-line `[_Aside._]`, Ophelia's eight-line letter and the
 line after it that must *not* be italic, the one unpaired underscore in the corpus, and
 the bracketed/unbracketed presentation split) plus a sweep over all 35 plays asserting
-that no underscore survives in any `plainText` and that the spans of every line are
-non-empty, ordered, non-overlapping and inside it; one **golden `PassageContext`
+that no underscore and no unexpanded `&c` survive in any `plainText`, setting or blurb,
+and that the spans of every line are non-empty, ordered, non-overlapping and inside
+it; one **golden `PassageContext`
 render** compared against a checked-in string, which is what catches prompt drift; and
 the typeface picker's inputs, including the CoreText italic probe that decides whether
 a stage direction gets a real italic cut or a synthetic one; and the reader's size

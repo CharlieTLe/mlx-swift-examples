@@ -2,13 +2,14 @@
 
 import Foundation
 
-/// Project Gutenberg's transcription markup, turned into text plus spans.
+/// Project Gutenberg’s transcription markup, turned into text plus spans.
 ///
 /// The corpus is parsed straight out of Gutenberg and keeps what the transcription
-/// uses: `_..._` marks an italic span, and a stage direction is bracketed (`[_Exit._]`)
-/// or not (`Enter Francisco and Barnardo, two sentinels.`). Left alone, Hamlet I.v
-/// renders as `_Hic et ubique?_ Then we’ll shift our ground.` — underscores and all —
-/// and that same string is what goes into the annotation prompt.
+/// uses: `_..._` marks an italic span, a stage direction is bracketed (`[_Exit._]`)
+/// or not (`Enter Francisco and Barnardo, two sentinels.`), and `&c.` stands where a
+/// modern edition prints `etc.` Left alone, Hamlet I.v renders as
+/// `_Hic et ubique?_ Then we’ll shift our ground.` — underscores and all — and that
+/// same string goes into the annotation prompt.
 ///
 /// Pure, `Sendable` and deliberately **not** `@MainActor`, the same shape as
 /// `WordTokenizer` and `NavigatorSearch`, so `--selftest` can assert against it. It
@@ -34,11 +35,80 @@ enum GutenbergMarkup {
     ///
     /// The short-circuit is not a micro-optimization looking for a home: this is called
     /// on every `onContinuousHover` tick by way of `LineRow.resolvedWord(at:)`, and
-    /// about 95% of the corpus has no underscore in it, so it is the difference between
+    /// about 95% of the corpus has neither mark in it, so it is the difference between
     /// a per-event allocation and none.
     static func strip(_ text: String) -> String {
-        guard text.utf8.contains(UInt8(ascii: "_")) else { return text }
-        return text.replacingOccurrences(of: "_", with: "")
+        guard
+            text.utf8.contains(where: {
+                $0 == UInt8(ascii: "_") || $0 == UInt8(ascii: "&")
+            })
+        else { return text }
+        return scan(text).text
+    }
+
+    /// `etc.`, spelled out. 31 lines across 15 plays abbreviate it the way the
+    /// compositor did — `Enter priests, &c, in procession`, `Shall Rome, &c.` — and a
+    /// modern edition prints `etc.` Unlike the underscores and brackets around it this
+    /// is the edition's own text rather than transcription markup, so it is a
+    /// modernization and not a strip; it is here because it has to happen in the same
+    /// pass, or the italic spans would be measured against a different string than the
+    /// one drawn.
+    private static let etCetera = "etc."
+
+    /// The text without its markup, and the offset of every underscore in that output.
+    ///
+    /// **One implementation, deliberately.** `strip` and the span scanner used to walk
+    /// the line separately and had to be asserted to agree; expanding `&c.` — the one
+    /// substitution here that changes the line's *length* — is what made two of them
+    /// untenable, since a disagreement of one UTF-16 unit silently slides every span
+    /// after it.
+    private static func scan(_ text: String) -> (text: String, marks: [Int]) {
+        var out = ""
+        out.reserveCapacity(text.count)
+        var marks: [Int] = []
+        var offset = 0
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "_" {
+                marks.append(offset)
+                index = text.index(after: index)
+                continue
+            }
+            if character == "&", let end = etCeteraEnd(in: text, at: index) {
+                out += etCetera
+                offset += etCetera.utf16.count
+                index = end
+                continue
+            }
+            out.append(character)
+            offset += character.utf16.count
+            index = text.index(after: index)
+        }
+        return (out, marks)
+    }
+
+    /// The index just past `&c` or `&c.`, if that is what starts at `index`.
+    ///
+    /// `nil` for a bare ampersand, which is what keeps the two joint speech headings
+    /// the parser leaves sitting in speech text — `PRINCE & POINS.` and
+    /// `GLOUCESTER & CLARENCE.` — from becoming `PRINCE etc. POINS.` A following
+    /// letter or digit is rejected for the same reason, so a hypothetical `&created`
+    /// is left alone.
+    ///
+    /// A trailing period is *consumed*, because `etCetera` brings its own; a trailing
+    /// comma is not, so `Enter priests, &c, in procession` reads `etc.,` and keeps the
+    /// comma it was punctuated with.
+    private static func etCeteraEnd(in text: String, at index: String.Index) -> String.Index? {
+        let afterAmpersand = text.index(after: index)
+        guard afterAmpersand < text.endIndex, text[afterAmpersand] == "c" else { return nil }
+
+        let afterC = text.index(after: afterAmpersand)
+        guard afterC < text.endIndex else { return afterC }
+        if text[afterC] == "." { return text.index(after: afterC) }
+        guard !text[afterC].isLetter, !text[afterC].isNumber else { return nil }
+        return afterC
     }
 
     /// The italic spans of one block, as UTF-16 ranges of each line's stripped text.
@@ -52,21 +122,14 @@ enum GutenbergMarkup {
     /// underscore is only known to be unpaired once the whole block has been read.
     static func italics(inBlock lines: [String]) -> [[Range<Int>]] {
         // Pass 1: every underscore's position in the *output* coordinate space, which
-        // is the space the ranges are reported in. The running offset is accumulated
-        // rather than re-measured; asking `out.utf16.count` inside the loop is
-        // quadratic in the length of the line.
+        // is the space the ranges are reported in. `scan` is the same walk `strip`
+        // makes, so the offsets are measured against exactly the string that is drawn.
         var lengths = [Int](repeating: 0, count: lines.count)
         var marks: [(line: Int, offset: Int)] = []
         for (index, text) in lines.enumerated() {
-            var count = 0
-            for character in text {
-                guard character != "_" else {
-                    marks.append((index, count))
-                    continue
-                }
-                count += character.utf16.count
-            }
-            lengths[index] = count
+            let scanned = scan(text)
+            lengths[index] = scanned.text.utf16.count
+            marks.append(contentsOf: scanned.marks.map { (index, $0) })
         }
 
         // Pass 2: the marks are flattened block-wide, so a span that opens on one line
