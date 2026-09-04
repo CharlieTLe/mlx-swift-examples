@@ -335,6 +335,20 @@ struct ReaderTypeface: Equatable, Sendable {
         return custom(familyName, .body)
     }
 
+    /// The verse again, in italic: Gutenberg's `_..._` spans, which `LineRow` sets as
+    /// runs inside the line rather than as a font for the whole of it.
+    ///
+    /// Body-sized and not callout-sized, which is what separates this from `direction`
+    /// below — an italic span is *in* the verse, at the verse's size, while a direction
+    /// is a line of its own set a step smaller.
+    var verseItalic: Font {
+        guard let familyName else {
+            return textSize.isDefault ? .body.italic() : system(.body, italic: true)
+        }
+        guard hasItalicFace else { return Self.oblique(familyName, size: size(.body)) }
+        return custom(familyName, .body).italic()
+    }
+
     var direction: Font {
         guard let familyName else {
             return textSize.isDefault ? .callout.italic() : system(.callout, italic: true)
@@ -353,10 +367,16 @@ struct ReaderTypeface: Equatable, Sendable {
         (familyName == nil ? 0.6 : 0.4) * textSize.multiplier
     }
 
-    /// The stage-direction indent, which lives here rather than in `LineRow` because a
-    /// printed edition sets it in ems: 28pt against 17pt type is not the same indent as
+    /// The stage-direction inset, which lives here rather than in `LineRow` because a
+    /// printed edition sets it in ems: 28pt against 17pt type is not the same inset as
     /// 28pt against 26pt type.
-    var directionIndent: CGFloat { (28 * scale).rounded() }
+    ///
+    /// An inset and no longer an indent, on **both** sides and only for a centred
+    /// direction: after the presentation split no direction has a hanging left indent.
+    /// Gutenberg's `p.scenedesc` carries a 1em margin either side, which is what keeps
+    /// a long entrance from centring across the whole measure, and its `p.right`
+    /// carries none at all.
+    var directionInset: CGFloat { (28 * scale).rounded() }
 
     /// The line-number gutter's font, which stays on the system face for its
     /// monospaced digits but does scale with the reader's step: a 10pt number beside
@@ -377,7 +397,7 @@ struct ReaderTypeface: Equatable, Sendable {
     /// length itself becomes the thing making it hard to read. A full-screen 13" iPad in
     /// landscape is roughly 1100pt of pane, which is about twice a comfortable measure.
     ///
-    /// `scale` and not `textSize.multiplier`, for `directionIndent`'s reason restated: a
+    /// `scale` and not `textSize.multiplier`, for `directionInset`'s reason restated: a
     /// printed edition sets the measure in ems, so 620pt against 17pt type is not the same
     /// measure as 620pt against 26pt type, and the optical correction for a chosen family
     /// belongs in it too.
@@ -392,11 +412,11 @@ struct ReaderTypeface: Equatable, Sendable {
 
     // MARK: - Roles, resolved
 
-    /// `verse` and `direction` again, as concrete faces at concrete point sizes, which is
-    /// what hit-testing a word needs: a SwiftUI `Font` cannot be asked which family or how
-    /// many points it resolved to, so `WordHitTest` has to be told.
+    /// `verse`, `verseItalic` and `direction` again, as concrete faces at concrete point
+    /// sizes, which is what hit-testing a word needs: a SwiftUI `Font` cannot be asked
+    /// which family or how many points it resolved to, so `WordHitTest` has to be told.
     ///
-    /// These two **shadow** the roles above and have to be kept in step with them — the
+    /// These three **shadow** the roles above and have to be kept in step with them — the
     /// family, the point size, the `textSize.isDefault` short-circuit and the
     /// `size(_:)` / `systemFaceSize(_:)` asymmetry are all restated here. A role changed
     /// without its twin does not fail to compile; it makes the hover mark drift along the
@@ -409,6 +429,20 @@ struct ReaderTypeface: Equatable, Sendable {
     /// style there is a whole number of points.
     var versePlatformFont: PlatformFont {
         Self.face(familyName, size: scaledSize(.body), italic: false)
+    }
+
+    /// `verseItalic`'s shadow, for the same reason `directionPlatformFont` is
+    /// `direction`'s: italic advances are not the upright face's, so a span hit-tested
+    /// with the upright font drifts from the word after it.
+    ///
+    /// `italic: false` for Big Caslon is deliberate and not an oversight. Its italic is
+    /// `oblique(_:size:)`, which shears the matrix's `c` slot only, so its advances *are*
+    /// the upright face's — exactly as in `directionPlatformFont`. `hasItalicFace` probes
+    /// the family and not the size, so it already answers for body.
+    var verseItalicPlatformFont: PlatformFont {
+        Self.face(
+            familyName, size: scaledSize(.body),
+            italic: familyName == nil || hasItalicFace)
     }
 
     /// Directions, in the italic they are drawn in — italic advances are not the upright

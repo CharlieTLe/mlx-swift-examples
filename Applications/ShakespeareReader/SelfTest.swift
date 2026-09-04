@@ -37,6 +37,7 @@ enum SelfTest {
         let log = Log()
 
         corpus(log)
+        markup(log)
         selection(log)
         onStage(log)
         followUpParsing(log)
@@ -375,6 +376,180 @@ enum SelfTest {
         }
         log.equal(line.speaker, "THIRD WATCH", "the recovered inline speaker")
         log.equal(line.startsSpeech, true, "the recovered inline heading")
+    }
+
+    // MARK: - Gutenberg markup
+
+    /// The transcription's markup, turned into text plus italic spans.
+    ///
+    /// Every index here was read off the checked-in JSON, and each case is a shape a
+    /// simpler implementation gets wrong: a span inside one line, a span that must not
+    /// eat the brackets around it, a span that runs across eight lines and has to stop,
+    /// and the one source artifact in the corpus where an underscore has no partner.
+    /// The corpus-wide sweep at the end is what makes this a gate rather than five
+    /// examples.
+    private static func markup(_ log: Log) {
+        guard let corpus = try? CorpusLoader.load() else {
+            log.fail("could not load the corpus for the markup checks")
+            return
+        }
+
+        /// A UTF-16 range of a line, as the substring a reader would see italicised.
+        func slice(_ text: String, _ range: Range<Int>) -> String {
+            let utf16 = Array(text.utf16)
+            guard range.lowerBound >= 0, range.upperBound <= utf16.count else { return "" }
+            return String(decoding: utf16[range], as: UTF16.self)
+        }
+
+        /// One scene's lines and their spans, side by side.
+        func scene(_ playID: String, _ act: Int, _ number: Int)
+            -> (lines: [Line], italics: [[Range<Int>]])?
+        {
+            guard
+                let scene = corpus.scene(
+                    SceneKey(playID: playID, act: act, scene: number))
+            else {
+                log.fail("\(playID) \(act).\(number) not found")
+                return nil
+            }
+            return (scene.lines, GutenbergMarkup.italics(in: scene.lines))
+        }
+
+        // MARK: A span inside one line
+
+        // Hamlet I.v: `_Hic et ubique?_ Then we’ll shift our ground.` — the line the
+        // whole change is for, and until now the one the reader drew underscores and all.
+        if let hamletIV = scene("hamlet", 1, 5) {
+            log.equal(
+                hamletIV.lines[182].plainText,
+                "Hic et ubique? Then we’ll shift our ground.",
+                "Hamlet I.v 182 stripped")
+            log.equal(
+                hamletIV.italics[182], [0 ..< 14], "Hamlet I.v 182 italic spans")
+            log.equal(
+                slice(hamletIV.lines[182].plainText, 0 ..< 14), "Hic et ubique?",
+                "what Hamlet I.v 182's span covers")
+        }
+
+        // MARK: Brackets that survive, and a span that does not eat them
+
+        // The 152-line case a naive "trim brackets everywhere" fix breaks: a mid-line
+        // direction inside a *speech* line, which Gutenberg keeps visible.
+        if let hamletIIii = scene("hamlet", 2, 2) {
+            let line = hamletIIii.lines[209]
+            log.equal(
+                line.plainText,
+                "How say you by that? [Aside.] Still harping on my daughter. Yet he",
+                "Hamlet II.ii 209 keeps its brackets")
+            log.equal(hamletIIii.italics[209].count, 1, "Hamlet II.ii 209 span count")
+            if let span = hamletIIii.italics[209].first {
+                log.equal(
+                    slice(line.plainText, span), "Aside.",
+                    "Hamlet II.ii 209's span covers the direction and not its brackets")
+            }
+
+            // MARK: A span across eight lines, that stops
+
+            // Ophelia's letter. The direction at 129 closes the block before it, the
+            // span opens at 130 and closes on `HAMLET._` at 137 — and 138 carries no
+            // italic at all, which is the leak this case exists for.
+            log.equal(hamletIIii.lines[129].plainText, "Reads.", "the letter's cue")
+            log.equal(hamletIIii.italics[129], [], "a direction carries no spans")
+            for index in 130 ... 136 {
+                let length = hamletIIii.lines[index].plainText.utf16.count
+                log.equal(
+                    hamletIIii.italics[index], [0 ..< length],
+                    "Hamlet II.ii \(index) is wholly italic")
+            }
+            log.equal(
+                hamletIIii.lines[137].plainText, "HAMLET.", "the letter's signature")
+            log.equal(hamletIIii.italics[137], [0 ..< 7], "the letter closes on 137")
+            log.equal(
+                hamletIIii.italics[138], [],
+                "the letter's italic leaked past its closing underscore")
+        }
+
+        // MARK: The one unpaired underscore in the corpus
+
+        // `titus-andronicus` I.i: the source splits a single direction across two
+        // records, so 295 and 296 each carry one underscore and neither has a partner.
+        // Dropping it rather than pairing across the block boundary is what keeps the
+        // rest of the scene upright. The bare `]` on 296 is a known cosmetic artifact.
+        if let titus = scene("titus-andronicus", 1, 1) {
+            log.equal(
+                titus.lines[296].plainText, "Tribunes and Senators exit aloft.]",
+                "titus-andronicus I.i 296")
+            log.equal(titus.italics[295], [], "the split direction carries no spans")
+            log.equal(titus.italics[296], [], "an unpaired underscore opens no span")
+            log.equal(titus.italics[297], [], "the line after the unpaired underscore")
+        }
+
+        // MARK: The presentation split
+
+        // Gutenberg's own three paragraph classes. Verified exact against Hamlet's
+        // HTML: all 115 `p.right` paragraphs are bracketed and none of the 70
+        // `p.scenedesc` ones are, so the bracket is the whole discriminator.
+        for text in ["[_Exit._]", "[_Exeunt._]", "[_The cock crows._]"] {
+            log.equal(
+                direction(text).presentation, .bracketedDirection,
+                "\"\(text)\" should be right-aligned")
+        }
+        for text in [
+            "Enter Francisco and Barnardo, two sentinels.", "Re-enter Ghost.",
+            "Trumpets sound. The dumb show enters.",
+        ] {
+            log.equal(
+                direction(text).presentation, .sceneDescription,
+                "\"\(text)\" should be centred")
+        }
+        log.equal(
+            speech("HAMLET", 1, "To be, or not to be").presentation, .verse,
+            "a speech line's presentation")
+
+        // MARK: Corpus-wide invariants
+
+        // The `wordTokenizer` tiling invariant, transposed onto spans: this is what
+        // catches an off-by-one in the pairing, across all 35 plays rather than in the
+        // five passages above.
+        for play in corpus.plays {
+            for act in play.acts {
+                for scene in act.scenes {
+                    let label = "\(play.id) \(act.number).\(scene.number)"
+                    let spans = GutenbergMarkup.italics(in: scene.lines)
+                    log.equal(
+                        spans.count, scene.lines.count, "\(label): one entry per line")
+                    guard spans.count == scene.lines.count else { continue }
+
+                    for (index, line) in scene.lines.enumerated() {
+                        let text = line.plainText
+                        log.check(
+                            !text.contains("_"),
+                            "\(label) line \(index): an underscore survived in \"\(text)\"")
+                        // The two strippers have to agree, because the spans are measured
+                        // against the one and drawn against the other.
+                        log.equal(
+                            GutenbergMarkup.strip(line.text),
+                            String(line.text.filter { $0 != "_" }),
+                            "\(label) line \(index): the strippers disagree")
+
+                        var cursor = 0
+                        for span in spans[index] {
+                            log.check(
+                                !span.isEmpty,
+                                "\(label) line \(index): an empty span")
+                            log.check(
+                                span.lowerBound >= cursor,
+                                "\(label) line \(index): spans overlap or run backwards")
+                            log.check(
+                                span.upperBound <= text.utf16.count,
+                                "\(label) line \(index): a span runs past the line — "
+                                    + "\(span) in \(text.utf16.count) units")
+                            cursor = span.upperBound
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Selection
@@ -923,7 +1098,7 @@ enum SelfTest {
         let shipped = ReaderTypeface.system
         log.equal(shipped.textSize, .default, "the shipped typeface's size step")
         log.equal(shipped.speechGap, 6, "the shipped speech gap")
-        log.equal(shipped.directionIndent, 28, "the shipped stage-direction indent")
+        log.equal(shipped.directionInset, 28, "the shipped stage-direction inset")
         log.equal(shipped.gutterWidth, 30, "the shipped gutter width")
         // Not a rendering promise like the others around it but a layout one: 620 is
         // picked to clear the 640-ideal reader pane's ~590pt of text, so the measure is
@@ -948,6 +1123,10 @@ enum SelfTest {
             "the shipped speaker-heading font")
         log.equal(
             shipped.direction, .callout.italic(), "the shipped stage-direction font")
+        // The italic span inside a line of verse, which is the verse's own size and not
+        // the direction's — the two are a step apart and it would be invisible here if
+        // they were not asserted apart.
+        log.equal(shipped.verseItalic, .body.italic(), "the shipped verse-italic font")
         log.equal(
             shipped.gutterFont, .caption2.monospacedDigit(), "the shipped gutter font")
 

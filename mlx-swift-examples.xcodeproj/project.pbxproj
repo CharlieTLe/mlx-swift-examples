@@ -436,6 +436,7 @@
 				ShakespeareReader/Benchmark.swift,
 				ShakespeareReader/ContentView.swift,
 				ShakespeareReader/Corpus/CorpusLoader.swift,
+				ShakespeareReader/Corpus/GutenbergMarkup.swift,
 				ShakespeareReader/Corpus/OnStageTracker.swift,
 				ShakespeareReader/Corpus/PlayModel.swift,
 				ShakespeareReader/Platform/DictionaryLookup.swift,

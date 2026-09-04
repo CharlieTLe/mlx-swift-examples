@@ -16,7 +16,13 @@ enum Prompts {
     /// is the only lever for: `AnnotationCache.synopsis` keys on schema, prompt
     /// version and model ID, so nothing else would invalidate a scene summary
     /// written from lines that used to be misfiled as stage directions.
-    static let version = 2
+    ///
+    /// 3: `Line.plainText` now strips Gutenberg's italic underscores from speech as
+    /// well as from directions, so a cached annotation written before it was asked
+    /// about `_Hic et ubique?_` rather than about `Hic et ubique?`. The passage digest
+    /// covers the selected lines but not the BEFORE/AFTER window, so this is what
+    /// invalidates the rest.
+    static let version = 3
 
     // MARK: - Annotation
 

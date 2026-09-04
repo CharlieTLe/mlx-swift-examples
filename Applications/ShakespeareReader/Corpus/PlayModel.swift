@@ -86,19 +86,48 @@ struct Line: Codable, Sendable, Hashable {
     var isDirection: Bool { kind == .direction }
     var startsSpeech: Bool { speechStart ?? false }
 
-    /// Direction text without the transcription's markup.
+    /// How the line is set. Gutenberg's own HTML edition uses three paragraph classes
+    /// and this app follows them, because they are the conventions of a printed
+    /// edition rather than that transcription's house style.
+    enum Presentation: Sendable, Hashable {
+        /// `p.drama` — speech. Left, upright, with italic spans where marked.
+        case verse
+        /// `p.scenedesc` — an unbracketed direction, which is almost always an
+        /// entrance. Centred and italic, with a 1em margin either side.
+        case sceneDescription
+        /// `p.right` — a bracketed direction. Right-aligned and italic.
+        case bracketedDirection
+    }
+
+    /// Which of the three the line is.
     ///
-    /// The source marks italics with underscores and *usually* wraps a direction in
-    /// brackets — `[_Exeunt._]` — but not always: Hamlet's `Enter Francisco and
-    /// Barnardo, two sentinels.` has neither. Normalizing here means every consumer
-    /// gets plain text and adds its own brackets exactly once, rather than one of
-    /// them rendering `[[Exit.]]`.
+    /// The bracket is the whole discriminator, and it is exact rather than a heuristic:
+    /// in Hamlet's Gutenberg HTML all 115 `p.right` paragraphs are bracketed and none
+    /// of the 70 `p.scenedesc` ones are. Reads `text` and not `plainText`, because
+    /// `plainText` is what removes the bracket; no direction in the corpus has leading
+    /// whitespace, so `hasPrefix` needs no trim.
+    var presentation: Presentation {
+        guard isDirection else { return .verse }
+        return text.hasPrefix("[") ? .bracketedDirection : .sceneDescription
+    }
+
+    /// The line without the transcription's markup.
+    ///
+    /// The source marks italics with underscores — see `GutenbergMarkup`, which is
+    /// what turns them into spans the reader can draw — and *usually* wraps a
+    /// direction in brackets, `[_Exeunt._]`, but not always: Hamlet's `Enter Francisco
+    /// and Barnardo, two sentinels.` has neither.
+    ///
+    /// **Speech is stripped but never trimmed**, and that asymmetry is the point. A
+    /// bracket on a speech line is a mid-line direction Gutenberg keeps visible —
+    /// `How say you by that? [_Aside._] Still harping on my daughter.` — so trimming
+    /// brackets everywhere would eat it. A direction *is* the bracket's contents, so
+    /// normalizing there means every consumer adds its own brackets exactly once
+    /// rather than one of them rendering `[[Exit.]]`.
     var plainText: String {
-        guard isDirection else { return text }
-        return
-            text
-            .replacingOccurrences(of: "_", with: "")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+        let stripped = GutenbergMarkup.strip(text)
+        guard isDirection else { return stripped }
+        return stripped.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
     }
 }
 

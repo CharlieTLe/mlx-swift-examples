@@ -68,6 +68,19 @@ struct SceneReaderView: View {
     /// view and `LineRow`; nothing outside the reader pane sees it.
     @Environment(\.readerTypeface) private var typeface
 
+    /// The scene's italic spans, computed once and handed to the rows.
+    ///
+    /// A reference box, the `FrameBox` idiom again, and for a related reason: `body`
+    /// re-evaluates on every selection change and at frame rate through a drag, and
+    /// Hamlet II.ii is ~600 lines. Unlike `FrameBox` this one cannot feed back at all,
+    /// because it is a pure function of `(key, scene)` — reading it in `body` returns
+    /// the same value it returned last time or recomputes it, and neither invalidates
+    /// anything.
+    ///
+    /// Synchronous and not a `.task`, or the first frame of every scene would render
+    /// upright and then restyle under the reader.
+    @State private var italicsBox = SceneItalicsBox()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             measured(heading)
@@ -229,6 +242,7 @@ struct SceneReaderView: View {
         LineRow(
             index: index,
             line: line,
+            italics: italicsBox.italics(for: key, scene: scene)[index],
             display: line.speaker.map(cast.display),
             isSelected: selection?.contains(index) ?? false,
             isFirstSelected: selection?.range.lowerBound == index,
@@ -449,4 +463,22 @@ struct SceneReaderView: View {
             return NSItemProvider(object: text as NSString)
         }
     #endif
+}
+
+/// One scene's italic spans, held by reference so that reading them is not a view
+/// update and computing them is not a per-row cost.
+///
+/// Keyed on the `SceneKey` rather than recomputed per `body`: the reader moves between
+/// scenes far less often than the selection changes, and the whole point is that the
+/// scan runs once per scene rather than once per frame.
+@MainActor
+final class SceneItalicsBox {
+    private var cached: (key: SceneKey, italics: [[Range<Int>]])?
+
+    func italics(for key: SceneKey, scene: Scene) -> [[Range<Int>]] {
+        if let cached, cached.key == key { return cached.italics }
+        let computed = GutenbergMarkup.italics(in: scene.lines)
+        cached = (key, computed)
+        return computed
+    }
 }

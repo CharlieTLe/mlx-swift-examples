@@ -202,8 +202,10 @@ enum Citation {
                 if line.isDirection {
                     return "[\(line.plainText)]"
                 }
+                // `plainText` on both branches. Speech used to be copied raw, so a
+                // passage pasted into notes carried the transcription's underscores.
                 return line.startsSpeech && line.speaker != nil
-                    ? "\(line.speaker!). \(line.text)" : line.text
+                    ? "\(line.speaker!). \(line.plainText)" : line.plainText
             }
             .joined(separator: "\n")
         return quoted + "\n\n"

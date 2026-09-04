@@ -1,5 +1,6 @@
 // Copyright © 2026 Apple Inc.
 
+import CoreText
 import SwiftUI
 
 /// One line of the play: number gutter, optional speaker heading, the text.
@@ -17,10 +18,23 @@ import SwiftUI
 /// `SceneReaderView.row(index:line:)`, never in `body`, so a font change is a one-shot
 /// relayout that settles. Selection is the thing that has to stay size-neutral,
 /// because `isSelected` *is* read during layout.
+///
+/// The italic runs and the per-line alignment below are in the typeface's category and
+/// not selection's: both are derived from the line's own content, so they are constant
+/// for the life of the row and settle in one pass. Nothing reads them during layout.
 @MainActor
 struct LineRow: View {
     let index: Int
     let line: Line
+
+    /// The italic spans of this line, as UTF-16 ranges of `line.plainText`.
+    ///
+    /// Computed once per scene by `SceneReaderView` rather than per row, because `body`
+    /// re-evaluates on every selection change and at frame rate through a drag, and
+    /// Hamlet II.ii is ~600 lines. Empty for a stage direction, which is drawn italic
+    /// end to end.
+    let italics: [Range<Int>]
+
     let display: String?
     let isSelected: Bool
     let isFirstSelected: Bool
@@ -59,10 +73,47 @@ struct LineRow: View {
     /// same reason.
     @State private var verseFrame = FrameBox()
 
-    /// Verse indent. Speech lines hang under their heading; directions sit further
-    /// in and in italic, the way a printed edition sets them. The measure itself is
-    /// the typeface's, because it is proportional to the type it indents.
-    private var indent: CGFloat { line.isDirection ? typeface.directionIndent : 0 }
+    /// Verse insets. Gutenberg's own edition gives a centred entrance a 1em margin
+    /// either side, so a long one does not centre across the whole measure, and gives
+    /// a right-aligned exit none: it hangs off the measure's right edge, which is what
+    /// both that edition and a printed one do. Speech has neither. The measure itself
+    /// is the typeface's, because it is proportional to the type it insets.
+    private var insets: (leading: CGFloat, trailing: CGFloat) {
+        switch line.presentation {
+        case .verse: (0, 0)
+        case .sceneDescription: (typeface.directionInset, typeface.directionInset)
+        case .bracketedDirection: (0, 0)
+        }
+    }
+
+    /// Where each *visual* line sits when the text wraps.
+    private var textAlignment: TextAlignment {
+        switch line.presentation {
+        case .verse: .leading
+        case .sceneDescription: .center
+        case .bracketedDirection: .trailing
+        }
+    }
+
+    /// Where the text sits inside the row when it does **not** wrap. Neither this nor
+    /// `textAlignment` is redundant: one does the work in each case.
+    private var frameAlignment: Alignment {
+        switch line.presentation {
+        case .verse: .leading
+        case .sceneDescription: .center
+        case .bracketedDirection: .trailing
+        }
+    }
+
+    /// The same, for the shadow layout. `.natural` and not `.left` for verse, so the
+    /// shipped path in `WordHitTest.layout(_:_:)` stays the shipped path.
+    private var hitTestAlignment: CTTextAlignment {
+        switch line.presentation {
+        case .verse: .natural
+        case .sceneDescription: .center
+        case .bracketedDirection: .right
+        }
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -113,8 +164,10 @@ struct LineRow: View {
         markedText
             .font(line.isDirection ? typeface.direction : typeface.verse)
             .foregroundStyle(line.isDirection ? .secondary : .primary)
-            .padding(.leading, indent)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .multilineTextAlignment(textAlignment)
+            .padding(.leading, insets.leading)
+            .padding(.trailing, insets.trailing)
+            .frame(maxWidth: .infinity, alignment: frameAlignment)
             .background {
                 GeometryReader { geometry in
                     Color.clear
@@ -153,28 +206,58 @@ struct LineRow: View {
             #endif
     }
 
-    /// The verse, with the hovered word underlined.
+    /// The verse, with its italic spans set and the hovered word underlined.
     ///
-    /// An `AttributedString` is built **only** when a word is actually marked: with nothing
-    /// hovered this is `Text(line.plainText)` on the identical code path the app has always
-    /// taken. Same move `ReaderTextSize` makes by short-circuiting to the bare text style
-    /// at `.default` — the shipped rendering stays what it is rather than becoming
-    /// something equivalent to it.
+    /// An `AttributedString` is built **only** when there is something to say about a
+    /// run of the line: with no span and nothing hovered this is `Text(line.plainText)`
+    /// on the identical code path the app has always taken. Same move `ReaderTextSize`
+    /// makes by short-circuiting to the bare text style at `.default` — the shipped
+    /// rendering stays what it is rather than becoming something equivalent to it.
+    ///
+    /// Italic runs first and the underline second, so an underline that overlaps a span
+    /// splits it correctly rather than being split by it.
     private var markedText: Text {
         let text = line.plainText
-        guard let marked else { return Text(text) }
+        guard marked != nil || !italics.isEmpty else { return Text(text) }
 
         var string = AttributedString(text)
-        guard let lower = AttributedString.Index(marked.lowerBound, within: string),
-            let upper = AttributedString.Index(marked.upperBound, within: string)
-        else { return Text(text) }
+        for span in italics {
+            guard let range = attributedRange(span, of: text, in: string) else { continue }
+            // The run's own `.font`, and deliberately **not**
+            // `inlinePresentationIntent = .emphasized`: that hands the italic back to
+            // SwiftUI to synthesize and takes Big Caslon's hand-sheared oblique — which
+            // is also what the shadow layout is measured against — out of the picture.
+            string[range].font = typeface.verseItalic
+        }
 
-        // An underline rather than a background fill, so the mark does not compete with
-        // the selection band, which is already a fill. `Text.LineStyle` and not
-        // `NSUnderlineStyle`: both scopes spell this attribute `underlineStyle`, and only
-        // the SwiftUI one is the attribute a `Text` draws.
-        string[lower ..< upper].underlineStyle = Text.LineStyle.single
+        if let marked,
+            let lower = AttributedString.Index(marked.lowerBound, within: string),
+            let upper = AttributedString.Index(marked.upperBound, within: string)
+        {
+            // An underline rather than a background fill, so the mark does not compete
+            // with the selection band, which is already a fill. `Text.LineStyle` and not
+            // `NSUnderlineStyle`: both scopes spell this attribute `underlineStyle`, and
+            // only the SwiftUI one is the attribute a `Text` draws.
+            string[lower ..< upper].underlineStyle = Text.LineStyle.single
+        }
         return Text(string)
+    }
+
+    /// A `GutenbergMarkup` span, in the coordinates an `AttributedString` is subscripted
+    /// by. UTF-16 offsets are what crosses the gap, because `plainText` is computed and
+    /// so hands out a different `String` instance every time it is asked.
+    private func attributedRange(
+        _ span: Range<Int>, of text: String, in string: AttributedString
+    ) -> Range<AttributedString.Index>? {
+        guard span.lowerBound >= 0, span.lowerBound < span.upperBound,
+            span.upperBound <= text.utf16.count
+        else { return nil }
+        let lower = String.Index(utf16Offset: span.lowerBound, in: text)
+        let upper = String.Index(utf16Offset: span.upperBound, in: text)
+        guard let start = AttributedString.Index(lower, within: string),
+            let end = AttributedString.Index(upper, within: string)
+        else { return nil }
+        return start ..< end
     }
 
     /// The word under a point, or `nil` — a space, punctuation, or the blank right of a
@@ -182,19 +265,33 @@ struct LineRow: View {
     /// hit-testing near-miss something the reader can see before committing to it.
     private func resolvedWord(at point: CGPoint) -> Range<String.Index>? {
         let frame = verseFrame.rect
-        // The indent is part of the row, not of the text: the `Text` starts that far in,
-        // so both the point and the wrap width are measured from where it starts.
-        let width = frame.width - indent
-        let local = CGPoint(x: point.x - frame.minX - indent, y: point.y - frame.minY)
+        // The insets are part of the row, not of the text: the `Text` starts that far
+        // in, so both the point and the wrap width are measured from where it starts.
+        let local = CGPoint(
+            x: point.x - frame.minX - insets.leading, y: point.y - frame.minY)
         guard
             let index = WordHitTest.characterIndex(
-                at: local, in: line.plainText, font: platformFont, width: width)
+                at: local, in: line.plainText, layout: hitTestLayout)
         else { return nil }
         return WordTokenizer.word(at: index, in: line.plainText)
     }
 
-    private var platformFont: PlatformFont {
-        line.isDirection ? typeface.directionPlatformFont : typeface.versePlatformFont
+    /// The wrap width the `Text` was given: the row's own frame, less both insets.
+    private var textWidth: CGFloat {
+        verseFrame.rect.width - insets.leading - insets.trailing
+    }
+
+    /// The shadow layout, which has to reproduce what SwiftUI drew. A direction carries
+    /// no spans, so `italicFont` is inert there — passed unconditionally rather than
+    /// branched on, since a branch would only be a second thing to keep in step.
+    private var hitTestLayout: WordHitTest.Layout {
+        WordHitTest.Layout(
+            font: line.isDirection
+                ? typeface.directionPlatformFont : typeface.versePlatformFont,
+            italicFont: typeface.verseItalicPlatformFont,
+            italics: italics,
+            alignment: hitTestAlignment,
+            width: textWidth)
     }
 
     /// Look Up, Explain, Copy — and nothing at all where no word resolved, so the menu
@@ -227,12 +324,12 @@ struct LineRow: View {
         let frame = verseFrame.rect
         guard
             let origin = WordHitTest.baselineOrigin(
-                of: range.lowerBound, in: line.plainText, font: platformFont,
-                width: frame.width - indent)
+                of: range.lowerBound, in: line.plainText, layout: hitTestLayout)
         else { return }
         onLookUpWord(
             term,
-            CGPoint(x: origin.x + frame.minX + indent, y: origin.y + frame.minY))
+            CGPoint(
+                x: origin.x + frame.minX + insets.leading, y: origin.y + frame.minY))
     }
 
     /// `AnyShapeStyle` because the two branches are different style types, which is the

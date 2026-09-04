@@ -215,6 +215,18 @@ where at the reader pane's 640 `idealWidth` it is a no-op — 620 clears the ~59
 left after the gutter and the trailing padding — and only bites once the window is widened
 with the side panes hidden, which is the same problem for the same reason.
 
+The play is set with **Gutenberg's own three paragraph classes**, because they are a
+printed edition's conventions rather than that transcription's house style: speech
+(`p.drama`) is left and upright, with `_..._` drawn as italic runs; an unbracketed
+direction (`p.scenedesc`), which is almost always an entrance, is centred and italic
+inside a 1em margin either side; and a bracketed one (`p.right`) is right-aligned
+against the measure's edge. The bracket is the whole discriminator and it is exact
+rather than a heuristic — in Hamlet's Gutenberg HTML all 115 `p.right` paragraphs are
+bracketed and none of the 70 `p.scenedesc` ones are. `GutenbergMarkup` is what turns the
+underscores into spans, one speech block at a time, so the span that opens on the first
+line of Ophelia's letter and closes eight lines later on `HAMLET._` is drawn as one
+italic passage instead of reaching the reader — and the model — as underscores.
+
 Divergences worth knowing about before they look like bugs:
 
 - **`FoundationModelsIntegration` is on.** An Xcode project has no way to express a
@@ -596,7 +608,13 @@ clamping at scene edges); the on-stage scan against four real scenes that each b
 naive version of it; the three Romeo and Juliet cases that guard the parser edits above
 (both Chorus blocks present as scene 0 with 14 `CHORUS` lines each and the right first
 line, the balcony direction sitting between verse lines 1 and 2, `THIRD WATCH` owning
-its recovered inline heading); 11 follow-up parser cases; one **golden `PassageContext`
+its recovered inline heading); 11 follow-up parser cases; the **markup suite** — the
+five passages that decide `GutenbergMarkup` (a span inside one line, a span that must
+not eat the brackets of a mid-line `[_Aside._]`, Ophelia's eight-line letter and the
+line after it that must *not* be italic, the one unpaired underscore in the corpus, and
+the bracketed/unbracketed presentation split) plus a sweep over all 35 plays asserting
+that no underscore survives in any `plainText` and that the spans of every line are
+non-empty, ordered, non-overlapping and inside it; one **golden `PassageContext`
 render** compared against a checked-in string, which is what catches prompt drift; and
 the typeface picker's inputs, including the CoreText italic probe that decides whether
 a stage direction gets a real italic cut or a synthetic one; and the reader's size
