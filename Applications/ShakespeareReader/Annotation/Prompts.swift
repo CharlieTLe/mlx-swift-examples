@@ -22,7 +22,13 @@ enum Prompts {
     /// about `_Hic et ubique?_` rather than about `Hic et ubique?`. The passage digest
     /// covers the selected lines but not the BEFORE/AFTER window, so this is what
     /// invalidates the rest.
-    static let version = 3
+    ///
+    /// 4: the gloss rule named `"quietus"` as its example, and the model lifted the
+    /// word into passages that do not contain it — Voltemand's report of the Norway
+    /// embassy was annotated with `"quietus" (release) is the key here`, and the
+    /// follow-up list then offered to explain it. The example is now a schema rather
+    /// than a word, plus an explicit "it has to be in the passage".
+    static let version = 4
 
     // MARK: - Annotation
 
@@ -39,7 +45,8 @@ enum Prompts {
         - First sentence: what the passage says, in plain modern English.
         - Then: why it matters here. What the speaker wants, what just changed, who is \
         listening, what they do not know.
-        - Gloss at most three hard words inline, like this: "quietus" (release, death).
+        - Gloss at most three hard words inline, in the form "word" (plain meaning). \
+        The word has to be one the selected passage actually uses.
         - Quote at most six words at a time from the passage.
         - The scene summary covers the whole scene. Do not tell the reader what happens \
         after the selected passage unless the passage itself points to it.
