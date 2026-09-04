@@ -28,7 +28,21 @@ enum Prompts {
     /// embassy was annotated with `"quietus" (release) is the key here`, and the
     /// follow-up list then offered to explain it. The example is now a schema rather
     /// than a word, plus an explicit "it has to be in the passage".
-    static let version = 4
+    ///
+    /// 5: that was not binding enough — the model went on glossing words it had only
+    /// read in the surrounding window, `thorns` and `glow-worm` from the Ghost's exit
+    /// speech among them. Stating the constraint as a *check to run before writing*
+    /// holds where stating it as a property of the word did not. Measured with
+    /// `--benchmark --greedy` over the 13 sample passages: quoted single words that
+    /// come from outside the selection fall from 5 of 24 to 2 of 15.
+    ///
+    /// Naming the request's own block labels — "gloss only words printed under
+    /// SELECTED PASSAGE" — was tried first and rejected. It cut the glossing rather
+    /// than aiming it (2 of 5 words left in the selection), and it taught the model
+    /// the shape of the blocks: the Hamlet V.i annotation opened by transcribing the
+    /// passage as `First Clown: …`, which is what the "never mention the context"
+    /// rule below exists to prevent.
+    static let version = 5
 
     // MARK: - Annotation
 
@@ -46,7 +60,8 @@ enum Prompts {
         - Then: why it matters here. What the speaker wants, what just changed, who is \
         listening, what they do not know.
         - Gloss at most three hard words inline, in the form "word" (plain meaning). \
-        The word has to be one the selected passage actually uses.
+        Before glossing a word, check that the selected passage itself prints it. If it \
+        is only in the lines around the passage or in the summary, leave it alone.
         - Quote at most six words at a time from the passage.
         - The scene summary covers the whole scene. Do not tell the reader what happens \
         after the selected passage unless the passage itself points to it.
