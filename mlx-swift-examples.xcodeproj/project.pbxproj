@@ -12,6 +12,13 @@
 		0F5AD8002DB70E6300745C06 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = C32A17FC2CFFB98A0092A5B6 /* MLXLLM */; };
 		0F5AD8012DB70E6300745C06 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = C32A17FE2CFFB98A0092A5B6 /* MLXVLM */; };
 		81695B412BA373D300F260D8 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 81695B402BA373D300F260D8 /* MarkdownUI */; };
+		9745374C304BEA0E00EDCDED /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B01 /* MLXLLM */; };
+		9745374D304BEA0E00EDCDED /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B02 /* MLXVLM */; };
+		9745374E304BEA0E00EDCDED /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B03 /* MLXLMCommon */; };
+		9745374F304BEA0E00EDCDED /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B04 /* MLXHuggingFace */; };
+		97453750304BEA0E00EDCDED /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B05 /* MLX */; };
+		97453751304BEA0E00EDCDED /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B06 /* HuggingFace */; };
+		97453752304BEA0E00EDCDED /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B07 /* Tokenizers */; };
 		C3132C2E2DFB317C00270E8E /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = C3132C2D2DFB317C00270E8E /* MLXVLM */; };
 		C3132C302DFB317C00270E8E /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = C3132C2F2DFB317C00270E8E /* MLXLLM */; };
 		C3208E762DB1945D006AE6CA /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = C3208E752DB1945D006AE6CA /* MLX */; };
@@ -58,6 +65,13 @@
 		C3EA7F6F2F8444A00054AEA3 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = C3EA7F6E2F8444A00054AEA3 /* Tokenizers */; };
 		C3EA7F732F8445EE0054AEA3 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = C3EA7F722F8445EE0054AEA3 /* HuggingFace */; };
 		C3EA7F752F8445EE0054AEA3 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = C3EA7F742F8445EE0054AEA3 /* Tokenizers */; };
+		E5B2D1B00000000000000C01 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B01 /* MLXLLM */; };
+		E5B2D1B00000000000000C02 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B02 /* MLXVLM */; };
+		E5B2D1B00000000000000C03 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B03 /* MLXLMCommon */; };
+		E5B2D1B00000000000000C04 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B04 /* MLXHuggingFace */; };
+		E5B2D1B00000000000000C05 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B05 /* MLX */; };
+		E5B2D1B00000000000000C06 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B06 /* HuggingFace */; };
+		E5B2D1B00000000000000C07 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B07 /* Tokenizers */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -219,8 +233,9 @@
 		C3D9F9362FD36A9B0038C3B3 /* Mandelbrot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mandelbrot.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3D9F9452FD36AB50038C3B3 /* HeatTransfer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HeatTransfer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3D9F9542FD36AE10038C3B3 /* CurveFit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CurveFit.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F8D7023A2BB4E223003D7CF5 /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Package.swift; sourceTree = "<group>"; };
 		E5B2D1AF0000000000000A05 /* ShakespeareReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ShakespeareReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5B2D1B00000000000000A05 /* BibleReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BibleReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F8D7023A2BB4E223003D7CF5 /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Package.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -462,13 +477,57 @@
 			);
 			target = E5B2D1AF0000000000000A01 /* ShakespeareReader */;
 		};
+		E5B2D1B00000000000000A09 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				BibleReader/Annotation/Annotation.swift,
+				BibleReader/Annotation/AnnotationCache.swift,
+				BibleReader/Annotation/AnnotationPaneView.swift,
+				BibleReader/Annotation/AnnotationService.swift,
+				BibleReader/Annotation/CrossReferenceStore.swift,
+				BibleReader/Annotation/PassageContext.swift,
+				BibleReader/Annotation/PatristicCheck.swift,
+				BibleReader/Annotation/Prompts.swift,
+				BibleReader/Annotation/QuoteCheck.swift,
+				BibleReader/Annotation/ReferenceCheck.swift,
+				BibleReader/Annotation/ReferenceLinks.swift,
+				BibleReader/Assets.xcassets,
+				BibleReader/Benchmark.swift,
+				BibleReader/BibleReaderApp.swift,
+				BibleReader/ContentView.swift,
+				BibleReader/Corpus/BibleModel.swift,
+				BibleReader/Corpus/BookTable.swift,
+				BibleReader/Corpus/CorpusLoader.swift,
+				BibleReader/Corpus/PsalmNumbering.swift,
+				BibleReader/Corpus/Reference.swift,
+				BibleReader/Platform/DictionaryLookup.swift,
+				BibleReader/Platform/PlatformCompat.swift,
+				BibleReader/Reader/ChapterReaderView.swift,
+				BibleReader/Reader/NavigatorOutline.swift,
+				BibleReader/Reader/NavigatorSearch.swift,
+				BibleReader/Reader/NavigatorView.swift,
+				BibleReader/Reader/ReaderFont.swift,
+				BibleReader/Reader/ReaderFontLibrary.swift,
+				BibleReader/Reader/ReaderTextSize.swift,
+				BibleReader/Reader/ReadingProgress.swift,
+				BibleReader/Reader/RowFrames.swift,
+				BibleReader/Reader/SweepRecognizer.swift,
+				BibleReader/Reader/VerseRow.swift,
+				BibleReader/Reader/VerseSelection.swift,
+				BibleReader/Reader/WordHitTest.swift,
+				BibleReader/Reader/WordTokenizer.swift,
+				BibleReader/Resources/Books,
+				BibleReader/SelfTest.swift,
+			);
+			target = E5B2D1B00000000000000A01 /* BibleReader */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C314FCF02EF3313B00E5B73A /* Configuration */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Configuration; sourceTree = "<group>"; };
 		C314FCF62EF3314200E5B73A /* Data */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C314FCFB2EF3314200E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Data; sourceTree = "<group>"; };
 		C314FD242EF3315100E5B73A /* Tools */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C314FD422EF3315100E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FD442EF3315100E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FD462EF3315100E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FD432EF3315100E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FD412EF3315100E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FD452EF3315100E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Tools; sourceTree = "<group>"; };
-		C314FDA02EF3315A00E5B73A /* Applications */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C314FDD82EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDA2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FEED2EF33B3900E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDD2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDC2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDB2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E5B2D1AF0000000000000A09 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (ShakespeareReader/Resources/Plays, ); path = Applications; sourceTree = "<group>"; };
+		C314FDA02EF3315A00E5B73A /* Applications */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C314FDD82EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDA2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FEED2EF33B3900E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDD2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDC2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C314FDDB2EF3315A00E5B73A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E5B2D1AF0000000000000A09 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E5B2D1B00000000000000A09 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (BibleReader/Resources/Books, ShakespeareReader/Resources/Plays, ); path = Applications; sourceTree = "<group>"; };
 		C397D92E2CD440EF00B87EE2 /* Libraries */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Libraries; sourceTree = "<group>"; };
 		C3D9F9312FD36A810038C3B3 /* Numerical */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C3D9FB882FD36CDA0038C3B3 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C3D9FB742FD36CA40038C3B3 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C3D9FB612FD36C500038C3B3 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Numerical; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -648,6 +707,27 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				97453752304BEA0E00EDCDED /* Tokenizers in Frameworks */,
+				97453751304BEA0E00EDCDED /* HuggingFace in Frameworks */,
+				97453750304BEA0E00EDCDED /* MLX in Frameworks */,
+				9745374F304BEA0E00EDCDED /* MLXHuggingFace in Frameworks */,
+				9745374E304BEA0E00EDCDED /* MLXLMCommon in Frameworks */,
+				9745374D304BEA0E00EDCDED /* MLXVLM in Frameworks */,
+				9745374C304BEA0E00EDCDED /* MLXLLM in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5B2D1B00000000000000A03 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E5B2D1B00000000000000C07 /* Tokenizers in Frameworks */,
+				E5B2D1B00000000000000C06 /* HuggingFace in Frameworks */,
+				E5B2D1B00000000000000C05 /* MLX in Frameworks */,
+				E5B2D1B00000000000000C04 /* MLXHuggingFace in Frameworks */,
+				E5B2D1B00000000000000C03 /* MLXLMCommon in Frameworks */,
+				E5B2D1B00000000000000C02 /* MLXVLM in Frameworks */,
+				E5B2D1B00000000000000C01 /* MLXLLM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -691,6 +771,7 @@
 				C3D9F9452FD36AB50038C3B3 /* HeatTransfer.app */,
 				C3D9F9542FD36AE10038C3B3 /* CurveFit.app */,
 				E5B2D1AF0000000000000A05 /* ShakespeareReader.app */,
+				E5B2D1B00000000000000A05 /* BibleReader.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -1114,6 +1195,32 @@
 			productReference = E5B2D1AF0000000000000A05 /* ShakespeareReader.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E5B2D1B00000000000000A01 /* BibleReader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E5B2D1B00000000000000A06 /* Build configuration list for PBXNativeTarget "BibleReader" */;
+			buildPhases = (
+				E5B2D1B00000000000000A02 /* Sources */,
+				E5B2D1B00000000000000A03 /* Frameworks */,
+				E5B2D1B00000000000000A04 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BibleReader;
+			packageProductDependencies = (
+				E5B2D1B00000000000000B01 /* MLXLLM */,
+				E5B2D1B00000000000000B02 /* MLXVLM */,
+				E5B2D1B00000000000000B03 /* MLXLMCommon */,
+				E5B2D1B00000000000000B04 /* MLXHuggingFace */,
+				E5B2D1B00000000000000B05 /* MLX */,
+				E5B2D1B00000000000000B06 /* HuggingFace */,
+				E5B2D1B00000000000000B07 /* Tokenizers */,
+			);
+			productName = BibleReader;
+			productReference = E5B2D1B00000000000000A05 /* BibleReader.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1216,6 +1323,7 @@
 				C3D9F9442FD36AB50038C3B3 /* HeatTransfer */,
 				C3D9F9532FD36AE10038C3B3 /* CurveFit */,
 				E5B2D1AF0000000000000A01 /* ShakespeareReader */,
+				E5B2D1B00000000000000A01 /* BibleReader */,
 			);
 		};
 /* End PBXProject section */
@@ -1292,6 +1400,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		E5B2D1AF0000000000000A04 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5B2D1B00000000000000A04 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1421,6 +1536,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		E5B2D1AF0000000000000A02 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5B2D1B00000000000000A02 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -3813,11 +3935,19 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
 				GENERATE_INFOPLIST_FILE = NO;
 				"INFOPLIST_FILE[sdk=iphone*]" = "Applications/ShakespeareReader/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Applications/ShakespeareReader/Info-macOS.plist";
@@ -3827,6 +3957,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = "mlx.ShakespeareReader${DISAMBIGUATOR}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -3835,20 +3966,11 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				DEBUG_INFORMATION_FORMAT = dwarf;
-				ENABLE_TESTABILITY = YES;
-				GCC_DYNAMIC_NO_PIC = NO;
-				GCC_OPTIMIZATION_LEVEL = 0;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"DEBUG=1",
-					"$(inherited)",
-				);
-				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
 		};
@@ -3866,8 +3988,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -3880,6 +4004,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = "mlx.ShakespeareReader${DISAMBIGUATOR}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -3888,13 +4013,110 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E5B2D1B00000000000000A07 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphone*]" = "Applications/BibleReader/BibleReader-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Applications/BibleReader/BibleReader-macOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				"INFOPLIST_FILE[sdk=iphone*]" = "Applications/BibleReader/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Applications/BibleReader/Info-macOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "mlx.BibleReader${DISAMBIGUATOR}";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E5B2D1B00000000000000A08 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphone*]" = "Applications/BibleReader/BibleReader-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Applications/BibleReader/BibleReader-macOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = NO;
+				"INFOPLIST_FILE[sdk=iphone*]" = "Applications/BibleReader/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Applications/BibleReader/Info-macOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "mlx.BibleReader${DISAMBIGUATOR}";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -4069,6 +4291,15 @@
 			buildConfigurations = (
 				E5B2D1AF0000000000000A07 /* Debug */,
 				E5B2D1AF0000000000000A08 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E5B2D1B00000000000000A06 /* Build configuration list for PBXNativeTarget "BibleReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E5B2D1B00000000000000A07 /* Debug */,
+				E5B2D1B00000000000000A08 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -4415,6 +4646,36 @@
 			productName = HuggingFace;
 		};
 		E5B2D1AF0000000000000B07 /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C3EA7F532F8432080054AEA3 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
+		};
+		E5B2D1B00000000000000B01 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXLLM;
+		};
+		E5B2D1B00000000000000B02 /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXVLM;
+		};
+		E5B2D1B00000000000000B03 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXLMCommon;
+		};
+		E5B2D1B00000000000000B04 /* MLXHuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXHuggingFace;
+		};
+		E5B2D1B00000000000000B05 /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLX;
+		};
+		E5B2D1B00000000000000B06 /* HuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C3EA7F522F8431BE0054AEA3 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
+			productName = HuggingFace;
+		};
+		E5B2D1B00000000000000B07 /* Tokenizers */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C3EA7F532F8432080054AEA3 /* XCRemoteSwiftPackageReference "swift-transformers" */;
 			productName = Tokenizers;

@@ -24,6 +24,14 @@ examples use models implemented in [MLX Swift LM](https://github.com/ml-explore/
   `ChatSession` alive across a multi-turn exchange; the corpus ships with the app, so
   after the model download there are no network calls.
 
+- [BibleReader](Applications/BibleReader/README.md): The same three-pane reader over the
+  Douay-Rheims Bible, on macOS, iPhone and iPad. Select verses and a 4B LLM produces four
+  labelled sections — plain sense, context, cross-references and the Catholic
+  interpretive tradition. The interesting part is that the edition ships with its own
+  1750s commentary, so the prompt hands the model authored material to explain rather
+  than asking it to recall anything; three checks then verify the quotations, the
+  scripture references and the patristic citations it produces against the corpus.
+
 - [LoRATrainingExample](Applications/LoRATrainingExample/README.md): An example that runs on macOS that downloads an LLM and fine-tunes it using LoRA (Low-Rank Adaptation) with training data.
 
 - [LinearModelTraining](Tools/LinearModelTraining/README.md): An example that
