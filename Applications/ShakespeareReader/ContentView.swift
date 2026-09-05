@@ -125,6 +125,11 @@ struct ContentView: View {
     @State private var followUps: [String] = []
     @State private var transcript: [AnnotationPaneView.Exchange] = []
     @State private var phase: Phase = .idle
+
+    /// Quoted spans the model produced that are not in the selected passage.
+    /// Diagnostics only — `QuoteCheck` reports and never strips, so this changes
+    /// nothing the reader is shown.
+    @State private var unsupportedQuotes: [String] = []
     @State private var promptTokens: Int?
     @State private var timeToFirstToken: TimeInterval?
     @State private var stats: GenerationStats?
@@ -835,6 +840,9 @@ struct ContentView: View {
                     case .answering:
                         Image(systemName: "text.cursor")
                         Text("Answering")
+                    case .revising:
+                        ProgressView().controlSize(.small)
+                        Text("Revising the answer…")
                     }
 
                     Spacer()
@@ -851,6 +859,20 @@ struct ContentView: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .textSelection(.enabled)
+                }
+
+                if !unsupportedQuotes.isEmpty {
+                    // Reported, never corrected. A quotation the selected passage does
+                    // not contain is evidence about a prompt, and this app has learned
+                    // more from reading those than from anything else; hiding them to
+                    // tidy the output would spend the signal.
+                    Text(
+                        "not in the passage: "
+                            + unsupportedQuotes.map { "“\($0)”" }.joined(separator: ", ")
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
                 }
 
                 if let errorMessage {
@@ -1162,6 +1184,8 @@ struct ContentView: View {
                     // them here would replace the reader's own request with a
                     // 40-token prefill.
                     break
+                case .unsupportedQuotes(let spans):
+                    unsupportedQuotes = spans
                 case .failed(let message):
                     errorMessage = message
                 }
@@ -1244,6 +1268,8 @@ struct ContentView: View {
                     followUps = questions
                 case .stats(let value):
                     stats = value
+                case .unsupportedQuotes(let spans):
+                    unsupportedQuotes = spans
                 case .failed(let message):
                     errorMessage = message
                 default:

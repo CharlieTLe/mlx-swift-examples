@@ -23,6 +23,9 @@ enum Phase: Equatable, Sendable {
     case streaming
     case listingFollowUps
     case answering
+    /// The answer draft is written and is being revised before the reader sees it.
+    /// The one turn with an edit channel; see `Prompts.answerRevision`.
+    case revising
 }
 
 struct GenerationStats: Sendable, Equatable {
@@ -57,6 +60,11 @@ enum AnnotationEvent: Sendable {
     /// against a 526-1,023-token turn 1, and its cost tracks the length of the
     /// commentary rather than the length of the context.
     case followUpStats(GenerationStats)
+    /// Quoted spans the model produced that are not in the selected passage.
+    ///
+    /// Diagnostic, never a correction: `QuoteCheck` reports and does not strip, and
+    /// what the reader sees is a separate decision from knowing the prompt slipped.
+    case unsupportedQuotes([String])
     case failed(String)
 }
 
@@ -116,6 +124,10 @@ final class AnnotationService {
         let key: PassageKey
         let digest: String
         let session: ChatSession
+        /// The selected lines as the model was given them, which is what
+        /// `QuoteCheck` has to compare against — not the whole scene, and not the
+        /// BEFORE window, since quoting either of those is the defect.
+        let passageText: String
         var commentary = ""
         var followUpsRaw = ""
         var followUps: [String] = []
@@ -129,14 +141,25 @@ final class AnnotationService {
 
         init(
             key: PassageKey, digest: String, session: ChatSession,
-            synopsisUsed: Bool, needsHistoryPrefill: Bool = false
+            passageText: String, synopsisUsed: Bool, needsHistoryPrefill: Bool = false
         ) {
             self.key = key
             self.digest = digest
             self.session = session
+            self.passageText = passageText
             self.synopsisUsed = synopsisUsed
             self.needsHistoryPrefill = needsHistoryPrefill
         }
+    }
+
+    /// Runs the quote check and reports what failed. Never alters the text.
+    private func report(
+        quotesIn text: String, against current: PassageSession,
+        to continuation: AsyncStream<AnnotationEvent>.Continuation
+    ) {
+        let unsupported = QuoteCheck.unsupported(in: text, passage: current.passageText)
+        guard !unsupported.isEmpty else { return }
+        continuation.yield(.unsupportedQuotes(unsupported))
     }
 
     // MARK: - Loading
@@ -317,6 +340,7 @@ final class AnnotationService {
                 let restored = PassageSession(
                     key: context.key, digest: context.digest,
                     session: rehydratedSession(container, context: context, entry: entry),
+                    passageText: Prompts.render(context.selected),
                     synopsisUsed: entry.synopsisUsed, needsHistoryPrefill: true)
                 restored.commentary = entry.commentary
                 restored.followUpsRaw = entry.followUpsRaw
@@ -342,6 +366,7 @@ final class AnnotationService {
                 additionalContext: Self.nonThinking)
             let current = PassageSession(
                 key: context.key, digest: context.digest, session: session,
+                passageText: Prompts.render(context.selected),
                 synopsisUsed: context.synopsis != nil)
             passage = current
 
@@ -442,12 +467,15 @@ final class AnnotationService {
             continuation.yield(.phase(.answering))
 
             do {
+                // The draft is withheld rather than streamed, because the revision
+                // below can only be a revision if nothing has been shown yet. This is
+                // the whole cost of the edit channel: roughly a second of silence
+                // before the first visible token, paid on the answer turn only.
+                var draft = ""
                 for try await item in current.session.streamDetails(
                     to: Prompts.answerRequest(question))
                 {
-                    if let chunk = item.chunk {
-                        continuation.yield(.answer(chunk))
-                    }
+                    if let chunk = item.chunk { draft += chunk }
                     if let info = item.info {
                         continuation.yield(.stats(Self.stats(info)))
                     }
@@ -458,15 +486,55 @@ final class AnnotationService {
                     return
                 }
 
+                continuation.yield(.phase(.revising))
+                var answer = ""
+                for try await item in current.session.streamDetails(
+                    to: Prompts.answerRevision)
+                {
+                    if let chunk = item.chunk {
+                        answer += chunk
+                        continuation.yield(.answer(chunk))
+                    }
+                    if let info = item.info {
+                        continuation.yield(.stats(Self.stats(info)))
+                    }
+                }
+
+                // A revision that came back empty is worse than an unrevised draft.
+                if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    continuation.yield(.answer(draft))
+                    answer = draft
+                }
+                report(quotesIn: answer, against: current, to: continuation)
+
+                guard !Task.isCancelled else {
+                    continuation.finish()
+                    return
+                }
+
                 // Sustain the loop: ask for five, keep the first four that are not
                 // already in `asked`.
+                //
+                // Same floor as turn 1, and for the same reason — one lonely chip
+                // looks broken. This path used to take whatever came back as long as
+                // it was not empty, so the two paths disagreed about the same product
+                // rule and a graded run ended with a single question under the answer.
+                // The dedupe is what makes it likely here rather than rare: by the
+                // second answer `asked` holds every question already offered, so a
+                // repetitive list is filtered down to one survivor rather than zero.
                 continuation.yield(.phase(.listingFollowUps))
                 current.session.generateParameters = presets.followUp
-                let raw = try await collect(
+                var raw = try await collect(
                     current.session.streamDetails(to: Prompts.moreFollowUpsRequest))
-                let fresh = Prompts.FollowUps.parse(raw, asked: current.asked)
-                if !fresh.isEmpty {
+                var fresh = Prompts.FollowUps.parse(raw, asked: current.asked)
+                if fresh.count < 2 {
+                    raw = try await collect(
+                        current.session.streamDetails(to: Prompts.followUpRetry))
+                    fresh = Prompts.FollowUps.parse(raw, asked: current.asked)
+                }
+                if fresh.count >= 2 {
                     current.followUps = fresh
+                    current.asked.formUnion(fresh.map(Prompts.FollowUps.normalized))
                     continuation.yield(.followUps(fresh))
                 }
             } catch is CancellationError {
@@ -608,6 +676,11 @@ final class AnnotationService {
     /// is usually ready in time. It holds the single `ModelContainer` while it runs,
     /// which is why a selection cancels it rather than queueing behind it.
     func prewarmSynopsis(key: SceneKey, scene: Scene) {
+        // Nothing reads the result while `usesSceneSynopsis` is off — the pane never
+        // rendered the text, only the partial-coverage caption — so generating it
+        // would be 10-20 s of GPU per scene spent on a string no one sees. The
+        // machinery stays wired for the A/B; see `Prompts.usesSceneSynopsis`.
+        guard Prompts.usesSceneSynopsis else { return }
         guard synopses[key] == nil, isReady, let container else { return }
         cancelPrewarm()
 

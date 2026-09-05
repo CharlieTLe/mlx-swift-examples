@@ -122,6 +122,46 @@ enum OnStageTracker {
         aggregateLabels.contains(token) || token.hasPrefix("BOTH ")
     }
 
+    /// Whether a direction moves somebody on or off, as opposed to saying how a line
+    /// is delivered. `PassageContext` uses it to tell an `[_Aside._]` governing the
+    /// selected passage from an `[_Exit._]` that merely precedes it.
+    static func isMovement(_ text: String) -> Bool {
+        keywords.contains { text.range(of: $0.pattern, options: .caseInsensitive) != nil }
+    }
+
+    /// The people a speech token stands for, when it stands for more than one.
+    ///
+    /// A joint heading is two bodies and was being tracked as one. Hamlet III.iii
+    /// heads a line `ROSENCRANTZ and GUILDENSTERN.`, which added that whole string;
+    /// the `[_Exeunt Rosencrantz and Guildenstern._]` on the very next line resolves
+    /// the two names *separately* and removes `ROSENCRANTZ` and `GUILDENSTERN`,
+    /// neither of which is that string. So the pair walked off and a phantom stayed
+    /// for the rest of the scene, and the prompt told the model that two courtiers
+    /// were watching Claudius pray alone — `On stage, approximately: King and
+    /// Rosencrantz And Guildenstern`. Five of eight sampled annotations had him
+    /// speaking to them. An invented audience the app invented.
+    ///
+    /// The mirror of the dedupe above: there one man with two tokens, here two people
+    /// with one token that no exit can name.
+    ///
+    /// Splits only when every member is a speaker the play knows, so a name that
+    /// merely contains "and" stays whole. `BOTH MURDERERS` never reaches here, being
+    /// aggregate. The ugly `Rosencrantz And Guildenstern` in the rendered list was the
+    /// visible marker of this and was passed over as cosmetic; it was not.
+    private static func members(of token: String, cast: Cast) -> [String]? {
+        let parts =
+            token
+            .replacingOccurrences(of: " & ", with: " and ")
+            .replacingOccurrences(of: " AND ", with: " and ")
+            .replacingOccurrences(of: ",", with: " and ")
+            .components(separatedBy: " and ")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard parts.count > 1 else { return nil }
+        let resolved = parts.compactMap { cast.resolve($0) }
+        return resolved.count == parts.count ? resolved : nil
+    }
+
     /// Display names of everyone plausibly on stage at `index`.
     ///
     /// A speech line adds its speaker, because someone speaking is necessarily
@@ -135,7 +175,37 @@ enum OnStageTracker {
         var lastSpeaker: String?
 
         func add(_ token: String) {
-            guard !isAggregate(token), !present.contains(token) else { return }
+            guard !isAggregate(token) else { return }
+            // A joint heading enters as its members, so a later exit naming them
+            // individually can take them off again. See `members(of:cast:)`.
+            if let members = members(of: token, cast: cast) {
+                members.forEach(addOne)
+                return
+            }
+            addOne(token)
+        }
+
+        func addOne(_ token: String) {
+            guard !present.contains(token) else { return }
+            // One man, two tokens, two bodies. Hamlet I.ii opens `Enter Claudius King
+            // of Denmark`, which resolves to `CLAUDIUS`, and his speeches are headed
+            // `KING.`, so the list read `Claudius, …, King` — a phantom body in a
+            // four-word list, in the scene whose selected line is about Hamlet's
+            // relation to that exact man.
+            //
+            // Collapsing on the persona alone would be wrong: `FIRST CLOWN` and
+            // `SECOND CLOWN` are both aliases of `Two Clowns` and are two people, the
+            // case `Cast.display` already refuses to rename. So this collapses only
+            // when one of the two tokens *is* the persona's own name, which is true of
+            // Claudius and `KING` and false of the clowns.
+            if let person = cast.persona(for: token),
+                present.contains(where: {
+                    cast.persona(for: $0)?.name == person.name
+                        && (person.name == token || person.name == $0)
+                })
+            {
+                return
+            }
             present.append(token)
         }
 

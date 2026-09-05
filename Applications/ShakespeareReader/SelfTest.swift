@@ -788,6 +788,34 @@ enum SelfTest {
             present("hamlet", 1, 5, atLine: 96), ["Ghost", "Hamlet"],
             "Hamlet I.v")
 
+        // One man, two tokens. `Enter Claudius King of Denmark` resolves to CLAUDIUS
+        // and his speeches are headed `KING.`, so this used to report both — a
+        // phantom body in the scene whose selected line is about Hamlet's relation to
+        // that exact man. The grave-diggers above are the case this must not break:
+        // two aliases of one personae entry that really are two people.
+        log.check(
+            !present("hamlet", 1, 2, atLine: 66).contains("King"),
+            "Hamlet I.ii does not list Claudius twice")
+        log.check(
+            present("hamlet", 1, 2, atLine: 66).contains("Claudius"),
+            "Hamlet I.ii still lists Claudius once")
+
+        // Two people, one token. `ROSENCRANTZ and GUILDENSTERN.` heads a line of
+        // III.iii and the `[_Exeunt Rosencrantz and Guildenstern._]` on the next line
+        // names them individually, so the joint string matched neither and survived
+        // every exit in the scene. Claudius prays alone at 98-99 and the prompt was
+        // telling the model two courtiers were watching; five of eight sampled
+        // annotations had him speaking to them.
+        log.equal(
+            present("hamlet", 3, 3, atLine: 99), ["King"],
+            "Hamlet III.iii, Claudius alone after everyone has gone")
+        // The pair are present while they are present — the split must not drop them.
+        // Order is the entry direction's: `Enter King, Rosencrantz and Guildenstern.`
+        log.equal(
+            present("hamlet", 3, 3, atLine: 27),
+            ["King", "Rosencrantz", "Guildenstern"],
+            "and both are on stage before the Exeunt")
+
         // The personae/dialogue name link, which the prompt's WHO THEY ARE block
         // depends on: Claudius speaks throughout as `KING.`
         guard let hamlet = corpus.play("hamlet") else { return }
@@ -832,6 +860,75 @@ enum SelfTest {
     // MARK: - Follow-up parsing
 
     private static func followUpParsing(_ log: Log) {
+        // Clauses that are load-bearing for a graded defect, pinned so they cannot
+        // leave silently.
+        //
+        // This is a mechanical answer to a human-error problem, and it exists because
+        // of a specific one. `answerRequest` used to end "If the play does not settle
+        // it, say so." A wholesale rewrite of that string to fix an unrelated defect
+        // dropped it, and nothing noticed for three versions — long enough for a graded
+        // item to be scored against a rule that was not in the prompt, and for the
+        // engineer and the expert to spend a round reasoning about why it never fired.
+        // Everything else that matters in `Prompts` is asserted somewhere here; that
+        // clause was not.
+        //
+        // Markers rather than whole sentences, so rewording stays cheap and only
+        // *removal* fails. Add a row when a clause turns out to be load-bearing; that
+        // is the moment its absence would cost a graded item.
+        let pinned: [(name: String, marker: String, prompt: String)] = [
+            ("annotatorInstructions forbids quoting what is not on the page",
+                "cannot see", Prompts.annotatorInstructions),
+            ("followUpRequest forbids it too",
+                "cannot see", Prompts.followUpRequest),
+            ("moreFollowUpsRequest forbids it too",
+                "cannot see", Prompts.moreFollowUpsRequest),
+            ("answerRequest forbids it too",
+                "cannot see", Prompts.answerRequest("What does this mean?")),
+            ("answerRequest still admits an unsettled crux",
+                "does not settle", Prompts.answerRequest("What does this mean?")),
+            ("answerRevision forbids appending a correction",
+                "take the wrong sentence out", Prompts.answerRevision),
+        ]
+        for row in pinned {
+            log.check(row.prompt.contains(row.marker), row.name)
+        }
+
+        // MARK: The quote check
+
+        // Deterministic, no model, and aimed at the two classes three prompt rules
+        // have each failed to stop: verse that is in no play, and real verse from
+        // outside the selection.
+        let passage = """
+            GHOST:
+              Adieu, adieu, adieu. Remember me.
+            """
+        log.equal(
+            QuoteCheck.unsupported(in: "He says \"Remember me\" and goes.", passage: passage),
+            [], "a quotation from the passage passes")
+        log.equal(
+            QuoteCheck.unsupported(
+                in: "the \"canker galls the infants of the spring\" here", passage: passage),
+            ["canker galls the infants of the spring"],
+            "real verse from outside the selection is caught")
+        log.equal(
+            QuoteCheck.unsupported(
+                in: "\"ye soft-voiced, weak-tempered, fleshy-limbed\"", passage: passage),
+            ["ye soft-voiced, weak-tempered, fleshy-limbed"],
+            "verse that is in no play is caught")
+        // The corpus sets curly apostrophes and the model writes straight ones. That
+        // is the same quotation and must not be reported as an invention.
+        log.equal(
+            QuoteCheck.unsupported(
+                in: "\"pursu'd\"", passage: "But howsoever thou pursu’st this act,"),
+            ["pursu'd"], "a near miss is still a miss")
+        log.equal(
+            QuoteCheck.unsupported(
+                in: "\"pursu'st\"", passage: "But howsoever thou pursu’st this act,"),
+            [], "but a curly/straight apostrophe alone is not one")
+        log.equal(
+            QuoteCheck.unsupported(in: "he says \"a\" twice", passage: passage), [],
+            "a span too short to prove anything is skipped")
+
         let plain = """
             1. What does "quietus" mean here?
             2. Why does Hamlet say this now?
@@ -895,6 +992,28 @@ enum SelfTest {
 
         // Too short, and too long to be a question rather than a paragraph.
         log.equal(Prompts.FollowUps.parse("1. ok").count, 0, "a two-character question")
+
+        // A question that *opens* with a quoted phrase keeps both its quotes. The old
+        // trim took characters from each end independently, so it removed the opening
+        // one and stranded the closing one mid-row.
+        log.equal(
+            Prompts.FollowUps.parse(
+                "1. \"quintessence of dust\" — what does it mean?"
+            ).first,
+            "\"quintessence of dust\" — what does it mean?",
+            "an opening quoted phrase survives intact")
+
+        // A pair around the whole question is still packaging and still comes off.
+        log.equal(
+            Prompts.FollowUps.parse("1. \"Why does Hamlet say this?\"").first,
+            "Why does Hamlet say this?", "a wrapped question is unwrapped")
+        log.equal(
+            Prompts.FollowUps.parse("1. “Why does Hamlet say this?”").first,
+            "Why does Hamlet say this?", "curly quotes too")
+        log.equal(
+            Prompts.FollowUps.parse("1. \"What does \"kind\" mean here?\"").first,
+            "What does \"kind\" mean here?", "only the outer pair comes off")
+
         log.equal(
             Prompts.FollowUps.parse("1. \(String(repeating: "long ", count: 40))").count,
             0, "a paragraph masquerading as a question")
@@ -982,6 +1101,157 @@ enum SelfTest {
         // the background, and a `==` here would call the passage new when it did.
         log.check(context.isSamePassage(as: summarized), "the same line, now with a synopsis")
         log.check(context != summarized, "a synopsis is still a difference under ==")
+
+        // MARK: The long-selection clause
+
+        // The golden above is one line, so it renders only the short tail. This is
+        // the other branch, and it is the exact selection note 7 records: a
+        // double-click on the Ghost's exit takes his whole contiguous run.
+        log.equal(
+            speech.selected.filter { !$0.isDirection }.count, 49,
+            "the Ghost's whole speech, in speech lines")
+        log.check(
+            Prompts.annotationRequest(speech).hasSuffix("stand in for the rest."),
+            "a long selection is told to hold the word budget")
+        log.check(
+            !rendered.contains("It runs to"),
+            "a one-line selection is not")
+
+        // MARK: The word budget
+
+        // The floor is what scales, and it is the half that was buying invention: a
+        // flat 90 words on a one-line selection got padded with "The tension is high".
+        // Boundaries rather than midpoints, since those are what an off-by-one moves.
+        log.equal(Prompts.wordBudget(lines: 1).low, 35, "one line gets a footnote's floor")
+        log.equal(Prompts.wordBudget(lines: 2).high, 70, "two lines stay short")
+        log.equal(Prompts.wordBudget(lines: 3).low, 60, "three lines step up")
+        log.equal(Prompts.wordBudget(lines: 9).high, 110, "nine lines is still the middle band")
+        log.equal(Prompts.wordBudget(lines: 10).low, 90, "ten lines reaches the full band")
+        log.equal(
+            Prompts.wordBudget(lines: 49).high, 150,
+            "the Ghost's whole speech gets the same ceiling, not a bigger one")
+
+        // Shape moved in beside length in version 18, because the two are one
+        // decision and splitting them across the instructions and the closing line
+        // meant only the half at the end was obeyed.
+        log.equal(Prompts.wordBudget(lines: 1).paragraphs, 1, "one line, one paragraph")
+        log.equal(Prompts.wordBudget(lines: 8).paragraphs, 2, "eight lines, two")
+        log.equal(Prompts.wordBudget(lines: 49).paragraphs, 2, "and never more than two")
+
+        // The summary is off, so no annotation prompt may carry one. A cache entry
+        // written while it was on must not be replayed with a block the model never
+        // saw — `rehydratedSession` clears it, and this is the belt on that.
+        log.check(
+            !Prompts.annotationRequest(summarized).contains("SCENE SUMMARY"),
+            "no scene summary reaches the annotation while the flag is off")
+
+        // MARK: The aside that governs a line it is not printed on
+
+        // Hamlet I.ii.66. The parser's leading-direction split gives `[_Aside._]` its
+        // own line, so a click on the verse leaves the aside in the BEFORE block,
+        // where it reads as trailing Claudius's speech — and the answer said Hamlet
+        // spoke the line to Claudius's face. Both positions are checked because a
+        // double-click takes the direction into the selection and a click does not.
+        guard let sceneII = corpus.scene(SceneKey(playID: "hamlet", act: 1, scene: 2)),
+            let kin = sceneII.lines.firstIndex(where: {
+                $0.text.hasPrefix("A little more than kin")
+            })
+        else {
+            log.fail("could not find Hamlet I.ii.66")
+            return
+        }
+
+        func directions(_ selection: LineSelection, in target: Scene, scene number: Int)
+            -> [String]
+        {
+            PassageContext.build(
+                play: play, key: SceneKey(playID: "hamlet", act: 1, scene: number),
+                scene: target, selection: selection, cast: Cast(play: play))?
+                .stageDirections ?? []
+        }
+
+        log.equal(
+            directions(LineSelection(at: kin), in: sceneII, scene: 2), ["Aside."],
+            "the aside on the line before the selection")
+        log.equal(
+            directions(LineSelection(anchor: kin - 1, head: kin), in: sceneII, scene: 2),
+            ["Aside."], "the aside inside the selection")
+
+        // The bug this replaced: only the selection's first line and the one above it
+        // were looked at, so a direction in the *middle* of a passage was invisible to
+        // the one mechanism that points at directions. Hamlet's swearing scene carries
+        // two, and the Ghost's location was never surfaced despite being on the page.
+        guard let swear = scene.lines.firstIndex(where: {
+            $0.text.hasPrefix("Never make known what you have seen")
+        })
+        else {
+            log.fail("could not find Hamlet I.v.157")
+            return
+        }
+        log.equal(
+            directions(LineSelection(anchor: swear, head: swear + 20), in: scene, scene: 5),
+            ["Cries under the stage.", "Beneath."],
+            "both directions inside the swearing passage")
+
+        // An `[_Exit._]` is bracketed too, and moving somebody off says nothing about
+        // how the lines are delivered. Hamlet's line 97 follows the Ghost's exit.
+        guard let after = scene.lines.firstIndex(where: {
+            $0.text.hasPrefix("O all you host of heaven")
+        })
+        else {
+            log.fail("could not find Hamlet I.v.97")
+            return
+        }
+        log.equal(
+            directions(LineSelection(at: after), in: scene, scene: 5), [],
+            "a movement direction is not surfaced")
+
+        // What the block actually says. The facts reaching `PassageContext` is half
+        // the fix; the other half is that THE MOMENT states them and stops, which is
+        // where the old clause went wrong by reading `[Aside.]` aloud as "said apart".
+        func request(_ selection: LineSelection, in target: Scene, scene number: Int)
+            -> String
+        {
+            PassageContext.build(
+                play: play, key: SceneKey(playID: "hamlet", act: 1, scene: number),
+                scene: target, selection: selection, cast: Cast(play: play))
+                .map(Prompts.annotationRequest) ?? ""
+        }
+
+        let aside = request(LineSelection(at: kin), in: sceneII, scene: 2)
+        log.check(aside.contains("Marked [Aside.]."), "the aside is stated")
+        log.check(
+            !aside.contains("said apart"), "and not interpreted for the model")
+        log.check(
+            request(LineSelection(anchor: swear, head: swear + 20), in: scene, scene: 5)
+                .contains("Marked [Cries under the stage.] and [Beneath.]."),
+            "two directions are joined, not listed")
+
+        // MARK: A speaker the cast list does not describe
+
+        // Hamlet III.ii.213, "The lady protests too much, methinks." The referent is
+        // the Player Queen, who matches no personae entry — the only related one is
+        // `Players`, with an empty blurb — so she used to be dropped from WHO THEY ARE
+        // entirely while Ophelia stood on stage a few lines away. The annotation read
+        // Gertrude's line as being about Ophelia.
+        guard let sceneMousetrap = corpus.scene(SceneKey(playID: "hamlet", act: 3, scene: 2)),
+            let lady = sceneMousetrap.lines.firstIndex(where: {
+                $0.text.hasPrefix("The lady protests too much")
+            })
+        else {
+            log.fail("could not find Hamlet III.ii.213")
+            return
+        }
+        let mousetrap = request(LineSelection(at: lady), in: sceneMousetrap, scene: 2)
+        log.check(
+            mousetrap.contains("- Queen (Gertrude): the Queen"),
+            "a described speaker carries its blurb")
+        // Version 19 listed the Player Queen here by bare name and it changed nothing:
+        // the same prompt with and without those rows, greedy, gave the same wrong
+        // referent. Pinned as a rejected approach so it is not tried a fourth time.
+        log.check(
+            !mousetrap.contains("- Player Queen"),
+            "and a blurbless one is not listed — measured inert, see PassageContext")
     }
 
     /// Regenerated deliberately, alongside a `Prompts.version` bump.
@@ -993,8 +1263,6 @@ enum SelfTest {
         SETTING: A more remote part of the Castle.
 
         SCENE OPENS: Enter Ghost and Hamlet.
-
-        ON STAGE (approximate): Ghost, Hamlet
 
         WHO THEY ARE:
         - Ghost: of the late king, Hamlet’s father
@@ -1029,7 +1297,9 @@ enum SelfTest {
           And shall I couple hell? O, fie! Hold, my heart;
           And you, my sinews, grow not instant old,
 
-        Annotate the selected passage.
+        THE MOMENT: Ghost speaks these lines, line 96 of the scene's 207. On stage, approximately: Ghost and Hamlet — everyone the directions record. Do not add anyone the lines do not. Nothing after line 96 has happened yet, so do not write as if it had.
+
+        Annotate the selected passage in 35-70 words, in one paragraph. Your first sentence has to be your own words, not the passage's: do not open with a speaker heading or with the lines themselves, and do not carry a capitalised heading into your prose — write Ophelia, not OPHELIA. Stop when you have said what the lines mean and why they matter — do not pad to the upper figure.
         """
 
     // MARK: - Reader fonts

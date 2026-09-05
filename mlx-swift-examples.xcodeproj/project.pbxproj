@@ -432,6 +432,7 @@
 				ShakespeareReader/Annotation/AnnotationService.swift,
 				ShakespeareReader/Annotation/PassageContext.swift,
 				ShakespeareReader/Annotation/Prompts.swift,
+				ShakespeareReader/Annotation/QuoteCheck.swift,
 				ShakespeareReader/Assets.xcassets,
 				ShakespeareReader/Benchmark.swift,
 				ShakespeareReader/ContentView.swift,

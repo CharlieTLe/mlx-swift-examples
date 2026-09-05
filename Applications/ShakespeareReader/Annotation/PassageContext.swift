@@ -34,8 +34,22 @@ struct PassageContext: Sendable, Hashable {
     var openingDirection: String?
     /// Approximate, from the direction scan. See `OnStageTracker`.
     var onStage: [String]
+    /// Who speaks the selected lines, as `Cast.label` names them, in the order they
+    /// speak. The render's own headings carry the speech token (`KING:`); this
+    /// carries the same name `WHO THEY ARE` uses, so the two co-refer.
+    var speakers: [String]
+    /// Bracketed directions bearing on the selected lines, in the order they appear.
+    ///
+    /// The edition sets these right-aligned against the speech they belong to
+    /// (`Line.Presentation.bracketedDirection`) — `[_Aside._]`, `[_Beneath._]`,
+    /// `[_Sings._]`. Movement is excluded, so a passage full of entrances and exits
+    /// does not start announcing them.
+    var stageDirections: [String]
+    /// Speech lines in the whole scene, so the passage's line numbers can be read as
+    /// a position rather than as bare figures.
+    var sceneLineCount: Int
     /// Only the speakers appearing in the window, and only those with a blurb
-    /// worth its tokens.
+    /// worth its tokens. Listing the others was tried and measured inert; see `build`.
     var personae: [PersonaNote]
     /// Up to 15 lines: one speech plus its cue.
     var preceding: [Utterance]
@@ -82,6 +96,21 @@ struct PassageContext: Sendable, Hashable {
 
         let windowSpeakers = OrderedSet(
             (preceding + selected + following).compactMap(\.speaker))
+        // Only speakers the cast list actually describes.
+        //
+        // Version 19 listed the others too, by bare name, so that Hamlet III.ii would
+        // carry `- Player Queen` — she is the referent of "the lady" and matches no
+        // personae entry, the one related row being `Players` with an empty blurb.
+        // **Measured inert and taken back out.** The same prompt with and without
+        // those rows, greedy, produced the same annotation: "Queen says the lady
+        // (Ophelia)", right speaker and wrong referent either way.
+        //
+        // That is the third fact this block has been given that changed nothing —
+        // after `Cast.label`'s `King (Claudius)`, built precisely so the model would
+        // not have to guess, and used zero times in four graded texts against eight
+        // lowercase "the king"s. The finding is not that the rows were the wrong rows.
+        // It is that `WHO THEY ARE` is not being consulted, and a fourth variant of it
+        // would be a fourth way of paying tokens for nothing.
         let personae = windowSpeakers.values.compactMap { token -> PersonaNote? in
             guard let person = cast.persona(for: token), !person.blurb.isEmpty
             else { return nil }
@@ -97,6 +126,10 @@ struct PassageContext: Sendable, Hashable {
             openingDirection: scene.openingDirection,
             onStage: OnStageTracker.onStage(
                 in: scene, upTo: range.upperBound, cast: cast),
+            speakers: OrderedSet(selected.compactMap(\.speaker)).values
+                .map(cast.label),
+            stageDirections: stageDirections(for: range, in: scene.lines),
+            sceneLineCount: scene.speechLineCount,
             personae: personae,
             preceding: preceding,
             selected: selected,
@@ -129,6 +162,29 @@ struct PassageContext: Sendable, Hashable {
         let floor = max(0, lowerBound - precedingLimit)
         let boundary = (floor ..< lowerBound).first { lines[$0].startsSpeech }
         return boundary ?? floor
+    }
+
+    /// The bracketed directions that bear on the selected lines.
+    ///
+    /// Two things were wrong with the version this replaces, and Hamlet I.v shows
+    /// both. It looked only at `range.lowerBound` and the line before it, so it found
+    /// the `[_Aside._]` in I.ii — which the parser's leading-direction split puts one
+    /// line above the verse it governs — and missed `[_Cries under the stage._]` and
+    /// `[_Beneath._]`, which sit in the *middle* of the swearing passage. The Ghost's
+    /// location was on the page three times and the one mechanism that points at a
+    /// direction could not see any of it. Scanning the whole selection is the fix.
+    ///
+    /// The line before the selection stays in scope, for the leading-direction split.
+    /// Movement stays excluded: a scene of entrances should not announce them.
+    private static func stageDirections(
+        for range: ClosedRange<Int>, in lines: [Line]
+    ) -> [String] {
+        lines[max(0, range.lowerBound - 1) ... range.upperBound]
+            .filter {
+                $0.isDirection && $0.presentation == .bracketedDirection
+                    && !OnStageTracker.isMovement($0.text)
+            }
+            .map(\.plainText)
     }
 
     private static func utterances(_ lines: ArraySlice<Line>) -> [Utterance] {

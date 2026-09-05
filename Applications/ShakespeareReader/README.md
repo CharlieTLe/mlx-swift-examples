@@ -9,8 +9,7 @@ Reading Shakespeare stalls on two things: the language, and the fact that a pass
 only means something in light of what happened twenty lines earlier. Print editions
 solve that with footnotes plus a headnote per scene, and the reader still has to jump
 around. This collapses the loop — select the lines, and the app gathers the
-surrounding context itself: act, scene, setting, who is on stage, the run-up lines, a
-summary of the scene so far.
+surrounding context itself: act, scene, setting, who is on stage, the run-up lines.
 
 ![Hamlet I.iv open in the reader. A speech is double-clicked and the commentary pane
 streams a gloss of it, then four follow-up questions. The arrow keys move and extend
@@ -317,12 +316,22 @@ disappointed — preceding 15 lines → 8, personae limited to the selection, dr
 synopsis — and none of that was needed. At 0.5 s to first token the annotation
 appears about as fast as a footnote you look down at.
 
-Prompt length runs 523-1,023 tokens, mean 749 without a scene summary and roughly
-850 with one. Early modern verse runs about **1.4 Qwen3 tokens per word** — elisions
+Prompt length runs 864-1,418 tokens, mean 1,099, measured with `--show-prompt` at
+prompt version 11. The scene summary no longer enters the prompt, so there is no
+longer a with/without figure; the growth over the 749 the table below was measured at
+is the instructions, which carry a rule for every way the annotation has been seen to
+fail. Early modern verse runs about **1.4 Qwen3 tokens per word** — elisions
 (`o'er`, `on't`) and curly apostrophes split more than modern prose — so do not
 budget this at 0.75 words per token. `--show-prompt` prints the assembled prompt
 with its exact count from
 `tokenizer.applyChatTemplate(messages:tools:additionalContext:)`.
+
+The table above was measured at prompt version 6, when the mean was 749. Versions 8
+to 11 added `THE MOMENT` and a rule per graded failure, taking the mean to 1,099 —
+about 350 tokens of extra prefill, or roughly 0.23 s at the measured 1,527 tok/s. A
+version 9 `--benchmark` put time to first token at 0.74 s and decode at 142 tok/s
+with peak memory 3.01 GB, so the shape of the table holds; it wants a re-run for the
+exact figures.
 
 ### Turn 2 is cheap, but not as cheap as it looks like it should be
 
@@ -388,9 +397,18 @@ A cache hit costs **1 ms** and no model work at all.
   find field at the top of the pane, which filters by play title (`macb`, `henry iv`,
   `loves labours`) or by scene setting (`churchyard` finds the grave-diggers); Esc
   clears it, and clicking a line is what hands the keyboard back to the play.
-- **Scene summaries** are generated in the background when a scene opens, in their
-  own throwaway session. A selection cancels the prewarm rather than queueing behind
-  it, and proceeds without a summary — the summary never blocks an annotation.
+- **Scene summaries are generated but no longer used.** They are off at
+  `Prompts.usesSceneSynopsis`, which also stops the prewarm, so nothing is generated
+  and no GPU is spent. `--benchmark` never built its context with one, which made it
+  an ablation by accident: with the summary, Hamlet I.ii.66 was annotated as though
+  the Ghost had already named the murderer — it appears in I.v — and I.iii.48-54 had
+  Polonius watching a scene he enters two lines later. Without it, both defects
+  vanish and nothing observable is lost. The summary of I.ii has been generated twice
+  and been wrong both times, differently. The pane never rendered the text anyway,
+  only the partial-coverage caption, so no reader loses anything visible. The
+  machinery stays wired so the comparison can be re-run by flipping the flag; that
+  constant carries the full reasoning, including why a genuinely "scene so far"
+  summary cannot be afforded and what design would rescue the feature.
 - **Four typefaces and five sizes for the play**: the system face, Caslon, Baskerville,
   Garamond, and a Small / Default / Large / Larger / Largest ladder, both picked from the
   same `Aa` menu in the header and both remembered between launches. Default reproduces
@@ -421,6 +439,45 @@ passage, because "To be or not to be" is in every training corpus on earth and t
 you nothing. Timon of Athens and the Henry VI plays are the useful end of the range for
 that. For scale, `--model mlx-community/Qwen3-0.6B-4bit` prefills at 8,426
 tok/s and decodes at 394 tok/s in 0.78 GB, and writes noticeably vaguer annotations.
+
+### A bigger model was measured, and the app stays on 4B
+
+Qwen3.5-9B-4bit, over the same thirteen `--benchmark` passages and the two the
+annotations were being graded on:
+
+| | Qwen3-4B-4bit | Qwen3.5-9B-4bit |
+|---|---|---|
+| peak memory | 3.01 GB | **7.50 GB** |
+| decode | 142 tok/s | 86 tok/s |
+| time to first token | 0.74 s | 1.84 s |
+| prefill | 1,460 tok/s | 659 tok/s |
+
+**No phone build at any device size.** `tuneMemory()` caps MLX at
+`min(6 GB, physicalMemory / 2)`, so a 7.50 GB peak is over the ceiling even on a
+16 GB iPad; the whole iPhone section above is built on the 4B's 3.31 GB.
+
+**What the extra parameters bought was not what was predicted, and the miss is the
+useful part.** The prediction on record was that scale would buy *lexis* — the class
+of word where a common modern descendant crowds out the archaic sense (*kind* meaning
+natural, *ungracious* meaning graceless), because every scholarly edition glosses
+those and it looked like a retrieval-depth problem. What it actually bought was
+*comprehension*: the 9B got the addressee right, read a hypocrisy simile the right way
+round, and handled an aside correctly, all of which the 4B had been failing. On lexis
+it went **backwards** — it glossed *rede* as "short for redemption", where the 4B at
+least reaches "a saying, remark". And it followed instructions worse, emitting the
+trailing dictionary paragraph the prompt forbids and running 162 words against a
+90-150 band.
+
+So the trade is a model that reads better and obeys worse, for 2.5× the memory and 60%
+of the speed — and the comprehension failures it fixes are the ones prompt work has
+been closing anyway, using the instruction-following it degrades. If you are about to
+try this, that is the afternoon and the 5.6 GB you can skip.
+
+`mlx-community/Qwen3-4B-Instruct-2507-4bit` is the one left open: identical footprint
+(2.80 GB, 149 tok/s) and the only one of the three to gloss *rede* correctly unprompted,
+but it fails *kind* exactly as the shipping model does. One word is not a reason to
+switch; it is a reason to look properly if the failures ever turn out to be
+concentrated in dead vocabulary.
 
 ## Corpus
 
@@ -651,7 +708,17 @@ prints the replacement.
   it. With it there is no visible `<think>` block.
 - **Sampling** follows Qwen3's own recommendation for non-thinking mode
   (`temperature: 0.7, topP: 0.8, topK: 20`), except the scene summary, which runs at
-  0.3 because it is meant to be dull and accurate.
+  0.3 because it is meant to be dull and accurate. The commentary and answer turns
+  ran at 0.5 for one version, to suppress the corrupted token below; that was
+  reverted once the artifact turned out to reproduce under greedy decoding. Cooling
+  bought nothing against it and made wrong glosses read more confidently, which is
+  the opposite of what this app wants — hedging tokens are low-probability, so a
+  colder distribution suppresses exactly the uncertainty a bad gloss ought to show.
+- **A corrupted token appears at a low rate and has no fix at 4 bits.** Three graded
+  passages produced three: `opheelia`, a bare `他`, and `Opophelia`. It is a
+  quantization artifact, not a sampling one — `Opophelia` reproduces under `--greedy`
+  at temperature 0 — so neither the presets nor the prompts reach it. Always a proper
+  name or a stray CJK character; a wider model is the only lever.
 - **`Memory.cacheLimit` is 256 MB**, not the 2 GB a 30B VLM wants — that figure is sized
   for a 20 GB model churning hundred-MB image activations. 256 MB is what
   `MLXFoundationModels` picks for a model this size.
@@ -664,7 +731,27 @@ prints the replacement.
   line adds its speaker (someone speaking is necessarily present) and a later exit
   removes them again. It follows the text faithfully even when the text is coy: in
   III.i the King and Polonius withdraw under an `Exeunt`, so the scan drops them,
-  though they are in fact eavesdropping.
+  though they are in fact eavesdropping. A **joint speech heading enters as its
+  members** — `ROSENCRANTZ and GUILDENSTERN.` as two bodies, not one — because an
+  exit names people individually and a joint token matched none of them, which left
+  a phantom on stage for the rest of III.iii and told the model two courtiers were
+  watching Claudius pray alone. There are 24 such headings across 15 of the 35 plays.
+  The mangled `Rosencrantz And Guildenstern` in the rendered list was the visible
+  marker of it, and was passed over once as cosmetic: the string is *rendered into the
+  prompt*, so malformed output on data the model reads is a symptom, not a blemish.
+- **`onStage(in:upTo:)` scans from the start of the scene**, not from the start of the
+  context window. Those are different spans and the window is the shorter one, so
+  "is it in the window" is not a test for what the on-stage list contains — a mistake
+  worth naming because it was made while diagnosing the bug above.
+- **`WHO THEY ARE` does not appear to be read.** Three facts have been added to that
+  block and none changed the output: `Cast.label`'s `King (Claudius)`, built so the
+  model would not have to guess that the `KING:` in the verse and the Claudius in the
+  notes are one man, went unused across four graded texts against eight lowercase
+  "the king"s; and bare-name rows for speakers the cast list does not describe were
+  added, measured with the same prompt greedy either way, and produced identical
+  annotations. Before extending this block a fourth time, measure whether it is being
+  consulted at all. The blocks that demonstrably do bind are the ones at the end of
+  the request — see `Prompts.closing(_:)` and the note on `wordBudget`.
 - **The prompt is ordered scene-invariant sections first**, then the passage window,
   which is what would make a per-scene prefix cache possible later
   (`ChatSession(cache:state:)`) without rewriting the prompts.
