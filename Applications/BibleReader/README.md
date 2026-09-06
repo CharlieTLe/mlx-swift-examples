@@ -356,7 +356,7 @@ decodes but is subtly wrong, and prompt drift.
 | `crossReferences` | **every** reference the app would put in a prompt, swept across the whole corpus |
 | `randomPassage` | the 1,764 / 72-book anchor pool, that **every** anchor resolves, the tier-2 prefix sum, and 400 draws with no repeat inside the ring |
 | `followUpParsing` | every way the model breaks "four numbered lines and nothing else" |
-| `goldenPromptRender` | one assembled prompt, byte for byte — **regenerate on every `Prompts.version` bump** |
+| `goldenPromptRender` | one assembled prompt, byte for byte — **regenerate on every `Prompts.version` bump** — plus that a citation names the verse the reader selected with Challoner's notes both on and off |
 
 The golden render uses Genesis 14:10 rather than the app's canonical Genesis 15:6, and
 deliberately: 15:6 is too clean, carrying neither a note nor a Challoner reference, so two

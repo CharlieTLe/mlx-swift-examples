@@ -1700,6 +1700,49 @@ enum SelfTest {
             log.fail("could not build the Genesis 15:6 context")
         }
 
+        // MARK: The rendered index space
+
+        // **A selection indexes the rows the reader can see**, which with Challoner's
+        // notes turned off is not `chapter.rows`. Everything `build` reads has to come out
+        // of the same array the selection was made in, and the citation is the one that
+        // used to come out of the other one: it named a verse one earlier per note above
+        // the selection, so Romans 4:9 — which has three notes above it — cited as
+        // `Romans 4:6`. Silent, and wrong about the only thing a citation asserts.
+        //
+        // Romans 4 rather than a hand-built chapter, because the bug needs real notes
+        // interleaved with real verses to show up at all.
+        if let romans = bible.book("romans"),
+            case let fourth = ChapterKey(bookID: "romans", chapter: 4),
+            let chapter = bible.chapter(fourth)
+        {
+            let visible = chapter.rows.filter { $0.kind != .note }
+            log.check(
+                visible.count < chapter.rows.count,
+                "Romans 4 carries no notes, so it cannot exercise the rendered index space")
+
+            for rows in [chapter.rows, visible] {
+                guard
+                    let ninth = rows.firstIndex(where: { $0.isVerse && $0.number == 9 }),
+                    let context = PassageContext.build(
+                        book: romans, key: fourth, chapter: chapter, rows: rows,
+                        selection: VerseSelection(at: ninth), crossReferences: store)
+                else {
+                    log.fail("could not build the Romans 4:9 context")
+                    continue
+                }
+                let notes = rows.count == chapter.rows.count ? "on" : "off"
+                log.equal(
+                    context.citation, "Romans 4:9 · \(Citation.edition)",
+                    "the Romans 4:9 citation with Challoner's notes \(notes)")
+                log.check(
+                    context.selected.first?.text.hasPrefix("This blessedness then")
+                        ?? false,
+                    "the Romans 4:9 selection with Challoner's notes \(notes)")
+            }
+        } else {
+            log.fail("could not load Romans 4")
+        }
+
         // MARK: Passage identity
 
         // What `ContentView.commit` tests before it decides a tap is a re-tap of the

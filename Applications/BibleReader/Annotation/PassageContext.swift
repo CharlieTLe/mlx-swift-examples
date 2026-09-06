@@ -118,6 +118,17 @@ struct PassageContext: Sendable, Hashable {
             followingStart < followingEnd
             ? verses(rows[followingStart ..< followingEnd]) : []
 
+        // The citation is read off the **rendered** chapter, not `chapter`, for the same
+        // reason `ChapterReaderView.quotation()` is: `range` indexes `rows`, and with
+        // Challoner's notes hidden those two arrays disagree by one per note above the
+        // selection. Citing against `chapter.rows` therefore named a verse that many
+        // earlier than the one highlighted — Romans 4:9, which has three notes above it,
+        // cited as `Romans 4:6` — which is the worst possible place to be off by three,
+        // since the citation is the app's claim about *which verse this is*.
+        let rendered = Chapter(
+            number: chapter.number, latinIncipit: chapter.latinIncipit,
+            argument: chapter.argument, rows: rows)
+
         return PassageContext(
             bookName: book.name,
             bookTitle: book.title,
@@ -139,7 +150,7 @@ struct PassageContext: Sendable, Hashable {
             selected: selected,
             following: following,
             citation: Citation.string(
-                book: book, chapter: chapter, first: range.lowerBound,
+                book: book, chapter: rendered, first: range.lowerBound,
                 last: range.upperBound),
             key: PassageKey(
                 chapter: key, first: range.lowerBound, last: range.upperBound),
