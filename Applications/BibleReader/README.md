@@ -89,15 +89,16 @@ scripture* is a different category: `Hezekiah 4:2` looks exactly as authoritativ
 `Isaias 7:14` in the same typeface, and the reader has no way to check either. So the
 three verdicts render differently:
 
-- **`ok`** — exists and was supplied. A tappable link; ⌘[ comes back.
+- **`ok`** — exists and was supplied. A link in the accent colour; ⌘[ comes back.
 - **`ungiven`** — the verse is real but was not supplied, so the *connection* is invented.
-  Plain text, no link.
-- **`nonexistent`** — struck through, "not in this Bible".
+  A link too, set in secondary text: what the verdict changes is how much the row claims,
+  not whether you can go and look.
+- **`nonexistent`** — struck through, "not in this Bible", and nowhere to go.
 
 Nothing is deleted in any case, and counts of all three land in the diagnostics strip.
 Over the benchmark run the model produced 5 `ok`, 6 `ungiven` and 0 `nonexistent`
-references, which is the check doing exactly what it exists for: six invented connections
-that the pane will not present as links.
+references, which is the check doing exactly what it exists for: six connections the pane
+declines to present as the app's own.
 
 ## Every reference is somewhere you can go
 
@@ -109,12 +110,13 @@ above all, in answers to follow-up questions; Challoner's notes are full of his 
 intercepts before the system, so nothing is registered in either `Info.plist` and the
 link never leaves the process. ⌘[ comes back.
 
-**Inline links resolve on existence, not on provenance**, which is the one place they
-part company with the three verdicts above. The supplied/`ungiven` distinction earns its
-keep in `SEE ALSO`, where the *connection* is the claim being made; in running prose the
-only question is whether the passage is in this Bible, and an answer about the parables
-reaches outside the supplied set by definition. A reference that does not resolve is
-struck through, for `ReferenceCheck`'s reason.
+**Links resolve on existence, not on provenance**, in `SEE ALSO` as in running prose. The
+supplied/`ungiven` distinction is real and is what the styling carries — in `SEE ALSO` the
+*connection* is the claim being made, and an unsupplied one is the model's — but it is not
+a reason to make a verse that is in this Bible unreachable from a row that names it, when
+the same reference three lines above in `PLAIN SENSE` is a link. An answer about the
+parables reaches outside the supplied set by definition. A reference that does not resolve
+is struck through, for `ReferenceCheck`'s reason.
 
 **Challoner is exempt from the strike.** If a reference in a 1750 note fails to resolve
 the likely fault is our parser, not the bishop, so an unresolved span in a note is left

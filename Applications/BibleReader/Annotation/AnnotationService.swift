@@ -413,7 +413,6 @@ final class AnnotationService {
                 let entry = await cache.passage(for: context.key, digest: context.digest)
             {
                 continuation.yield(.phase(.cached))
-                continuation.yield(.cached(entry))
                 // The text is restored now; the session is built but not prefilled
                 // until the first follow-up tap, so a cache hit itself costs nothing.
                 let restored = PassageSession(
@@ -426,6 +425,18 @@ final class AnnotationService {
                 restored.followUps = entry.followUps
                 restored.asked = Set(entry.followUps.map(Prompts.FollowUps.normalized))
                 passage = restored
+                // The four checks run again over the restored text, and before it is
+                // handed over, so a cache hit renders exactly as the run that produced
+                // it did. **Not cached with the annotation**: they are pure functions of
+                // the text and this corpus, they cost no model and no measurable time,
+                // and a verdict written to disk would go stale the moment the reference
+                // harvester or the book table changed. Without this the pane fell back
+                // to rendering the model's own `SEE ALSO` prose, which resolves on
+                // existence and knows nothing of what Challoner supplied — the one path
+                // in the app where a nonexistent reference and an unchecked one looked
+                // alike.
+                report(entry.commentary, against: restored, to: continuation)
+                continuation.yield(.cached(entry))
                 continuation.yield(.followUps(entry.followUps))
                 continuation.finish()
                 return

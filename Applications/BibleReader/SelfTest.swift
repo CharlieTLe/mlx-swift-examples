@@ -1052,7 +1052,8 @@ enum SelfTest {
         log.equal(found.first?.label, "Romans 4:3", "the normalized label")
         log.equal(found.first?.note, "Paul quotes this verse.", "the model's own note")
 
-        // `.ungiven` — the verse is real and the *connection* is invented. Plain text.
+        // `.ungiven` — the verse is real and the *connection* is invented. Secondary
+        // text, and still a link.
         found = check("See also Galatians 3:6.")
         log.equal(found.first?.verdict, .ungiven, "a real verse that was not supplied")
 

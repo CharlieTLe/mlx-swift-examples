@@ -276,43 +276,50 @@ struct AnnotationPaneView: View {
     /// The `SEE ALSO` section, rendered from the checked references rather than from the
     /// model's own lines.
     ///
-    /// Three verdicts, three renderings, and the middle one is the interesting case: a
-    /// verse that exists but was not supplied means the *connection* is the model's
-    /// invention even though the reference is real, so it is shown as plain text and does
-    /// not navigate. A nonexistent reference is struck through and says so — which is a
-    /// deliberate departure from `QuoteCheck`'s report-never-strip rule, because a
-    /// nonexistent scripture citation shown as if it were scripture is the app asserting
-    /// a false fact about the Bible, not merely relaying a bad quotation. Nothing is
-    /// deleted, so the signal survives.
+    /// Three verdicts and three renderings, and the middle one is the interesting case.
+    /// A verse that exists but was not supplied means the *connection* is the model's
+    /// invention even though the reference is real, so the row is set in secondary text
+    /// and carries none of the app's own weight — but it still navigates, because
+    /// **navigation resolves on existence everywhere in the app**. The same reference in
+    /// running prose is a link a line above; making it dead here taught the reader
+    /// nothing except that the pane was inconsistent. What the verdict changes is how
+    /// much the row claims, not whether you can go and look.
+    ///
+    /// A nonexistent reference is struck through and says so, and that one does not
+    /// navigate because there is nowhere to go. It is also a deliberate departure from
+    /// `QuoteCheck`'s report-never-strip rule: a nonexistent scripture citation shown as
+    /// if it were scripture is the app asserting a false fact about the Bible, not merely
+    /// relaying a bad quotation. Nothing is deleted, so the signal survives.
     @ViewBuilder
     private var referenceRows: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(references) { checked in
                 switch checked.verdict {
-                case .ok:
+                case .ok, .ungiven:
                     Button {
                         onOpen(checked.reference)
                     } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(checked.label)
                                 .font(.body.weight(.medium))
-                                .foregroundStyle(Color.accentColor)
-                            Text(checked.note)
+                                .foregroundStyle(
+                                    checked.verdict == .ok
+                                        ? AnyShapeStyle(Color.accentColor)
+                                        : AnyShapeStyle(.secondary))
+                            // Linked like every other run of the model's prose: the
+                            // "why it connects" is a sentence that can name a third
+                            // verse, and this row used to be the one place in the app
+                            // where such a name was neither a link nor struck.
+                            Text(link(checked.note))
                                 .font(.body)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(
+                                    checked.verdict == .ok
+                                        ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                             Spacer(minLength: 0)
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-
-                case .ungiven:
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(checked.label).font(.body.weight(.medium))
-                        Text(checked.note).font(.body)
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(.secondary)
 
                 case .nonexistent:
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
