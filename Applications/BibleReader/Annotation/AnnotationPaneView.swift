@@ -3,13 +3,19 @@
 import SwiftUI
 
 /// What the reader reads: the citation, the selected verses echoed small, the four
-/// streamed sections, the ask rows, and the transcript of anything tapped.
+/// sections, the ask rows, and the transcript of anything tapped.
 ///
-/// The scroll-following machinery, the ask rows and the transcript are ShakespeareReader's
-/// verbatim. What changed is the middle: one flowing paragraph became four labelled
-/// sections, **each of which may be absent**. See `Prompts.version` for why the house
-/// style was broken, and `Annotation.parseSections` for how a malformed run still
-/// reaches the reader.
+/// The ask rows and the transcript are ShakespeareReader's verbatim. What changed is the
+/// middle: one flowing paragraph became four labelled sections, **each of which may be
+/// absent**. See `Prompts.version` for why the house style was broken, and
+/// `Annotation.parseSections` for how a malformed run still reaches the reader.
+///
+/// **Nothing is shown until it is whole.** `ContentView` holds the model's output and
+/// publishes it in one assignment, so every section here is a finished section. The
+/// wait is carried by `status` instead, and the assignment lands inside a
+/// `withAnimation`, which turns each section's `if` into an animated insertion — hence
+/// the `.transition(.opacity)`s below and nothing else. A cache hit is assigned outside
+/// any animation and so appears instantly, which is what a cache hit should look like.
 @MainActor
 struct AnnotationPaneView: View {
     struct Exchange: Identifiable, Equatable {
@@ -20,15 +26,17 @@ struct AnnotationPaneView: View {
 
     let citation: String?
     let selectedVerses: [PassageContext.Verse]
-    /// The model's raw output. Parsed here rather than upstream, which is what makes the
-    /// sections stream: `Annotation.parseSections` is a pure function of the accumulated
-    /// text and is safe on a partial string, so a half-written section renders as a
-    /// half-written section and the four appear one at a time as the model reaches them.
-    /// Nothing has to be kept in step with anything.
+    /// The model's raw output, whole. Parsed here rather than upstream:
+    /// `Annotation.parseSections` is a pure function of the text and needs nothing kept
+    /// in step with it, which is why there is no `.section` event on the service.
     let commentary: String
     let followUps: [String]
     let transcript: [Exchange]
     let isBusy: Bool
+    /// What the pane says while it waits, from `Phase.label`. `nil` when there is
+    /// nothing running, or when the wait is a cache read that will be over before it
+    /// could be read.
+    let status: String?
     /// Cross-references the model named, with their verdicts. Phase 4.
     let references: [CheckedReference]
     /// Specific patristic or magisterial citations the model produced. Phase 4.
@@ -42,8 +50,9 @@ struct AnnotationPaneView: View {
     /// A closure and not the corpus, which is the shape this pane already has: it takes
     /// precomputed `[CheckedReference]` and callbacks and knows nothing about what is in
     /// this Bible. Run on every render, exactly as `Annotation.parseSections(commentary)`
-    /// is a few lines down and for the same reason — it is cheap, pure, and safe on the
-    /// half-written string a streamed token leaves behind.
+    /// is a few lines down and for the same reason — it is cheap and pure, and a run cut
+    /// short by cancellation or the token budget leaves a half-written string it still
+    /// has to be safe on.
     let link: (String) -> AttributedString
 
     /// The same for **Challoner's** own text, which is a separate closure because it
@@ -52,33 +61,7 @@ struct AnnotationPaneView: View {
     /// and not the bishop. See `ReferenceLinks.note`.
     let linkNote: (String) -> AttributedString
 
-    private static let space = "annotation"
     private static let contentID = "content"
-
-    /// Within two lines of body text of the end still counts as "at the end", so a
-    /// reader who flicks down without landing exactly at the bottom gets following
-    /// back.
-    private static let pinSlack: CGFloat = 40
-
-    /// Layout rounding moves the content top by a fraction of a point; only a real
-    /// scroll moves it further than this.
-    private static let scrollSlack: CGFloat = 4
-
-    @State private var isFollowing = true
-    @State private var contentFrame: CGRect = .zero
-    @State private var viewportHeight: CGFloat = 0
-    @State private var lastTop: CGFloat = 0
-    @State private var lastHeight: CGFloat = 0
-
-    /// Following the stream is opt-in. The first gloss of a selection is meant to be
-    /// read from the top, so the pane stays put and only chases the end of the
-    /// content once the reader has tapped an ask row.
-    @State private var isArmed = false
-
-    /// Set while one of the pane's own jumps is in flight. Those move the content
-    /// top exactly the way a reader scrolling up does, so without this they would
-    /// turn following off the instant they land.
-    @State private var isJumping = false
 
     /// The Ask Anything field's contents, and whether it holds the keyboard.
     @State private var draft = ""
@@ -108,9 +91,32 @@ struct AnnotationPaneView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(exchange.question)
                                 .font(.callout.weight(.semibold))
-                            Text(link(exchange.answer))
-                                .font(.body)
-                                .textSelection(.enabled)
+                            // Conditional so the answer *inserts* when it lands, which
+                            // is what makes the transition fire — an empty `Text`
+                            // growing into a full one is a content change and animates
+                            // nothing. It also keeps the question from sitting above an
+                            // empty block while the answer is being written.
+                            if !exchange.answer.isEmpty {
+                                Text(link(exchange.answer))
+                                    .font(.body)
+                                    .textSelection(.enabled)
+                                    .transition(.opacity)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    // Where the text is about to appear, which is the one position that
+                    // is right for both turns: under the header while the first gloss is
+                    // written, and under the question just tapped while its answer is.
+                    // With nothing arriving a word at a time any more, this is the only
+                    // sign the app is working — see the type's own note.
+                    if let status {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -133,20 +139,10 @@ struct AnnotationPaneView: View {
                     }
                 }
                 .padding(14)
-                // The scroll target is the whole content with a `.bottom` anchor,
-                // which puts the end of the ask rows at the end of the viewport
-                // rather than needing a sentinel row and the stack spacing that
-                // would come with it.
+                // The scroll target is the whole content, which is what the reset to
+                // the top scrolls to.
                 .id(Self.contentID)
-                .background(
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: ContentFrameKey.self,
-                            value: geometry.frame(in: .named(Self.space)))
-                    }
-                )
             }
-            .coordinateSpace(name: Self.space)
             // The pane is an inspector *sheet* on a phone, so the keyboard the Ask
             // Anything field raises covers the answer it was typed against. Dragging
             // the text down is then the way back, and without this there is none: the
@@ -154,32 +150,22 @@ struct AnnotationPaneView: View {
             #if !os(macOS)
                 .scrollDismissesKeyboard(.interactively)
             #endif
-            .background(
-                GeometryReader { geometry in
-                    Color.clear.preference(
-                        key: ViewportHeightKey.self, value: geometry.size.height)
-                }
-            )
-            .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
-            .onPreferenceChange(ContentFrameKey.self) { track($0) }
-            .onChange(of: streamTick) { follow(scroller) }
             .onChange(of: transcript.count) { old, new in
                 guard new > old, let asked = transcript.last else { return }
                 // The question the reader just tapped goes to the top, so it stays
                 // in view while its answer fills the space underneath.
-                jump { scroller.scrollTo(asked.id, anchor: .top) }
+                scroller.scrollTo(asked.id, anchor: .top)
             }
             .onChange(of: commentary.isEmpty) { _, isEmpty in
                 // A new selection, a regenerate and Esc all clear the commentary
                 // first, and fresh content should start at its beginning.
                 guard isEmpty else { return }
-                isArmed = false
                 // Whatever cleared the commentary took the reader somewhere else, so
                 // the field's claim on the keyboard is stale — a passage picked mid
                 // answer would otherwise have focus yanked out of the reader pane the
                 // moment its gloss finished.
                 wantsDraftFocus = false
-                jump { scroller.scrollTo(Self.contentID, anchor: .top) }
+                scroller.scrollTo(Self.contentID, anchor: .top)
             }
             .onChange(of: isBusy) { _, busy in
                 // The answer is done and the field is live again: give it the keyboard
@@ -197,25 +183,21 @@ struct AnnotationPaneView: View {
         }
     }
 
-    /// One value for "something grew", so following needs a single `onChange` rather
-    /// than one per streamed field. The ask rows count too: they arrive in one piece
-    /// once the gloss is done, and they are what the reader wants to see next.
-    private var streamTick: Int {
-        commentary.count + followUps.count + transcript.reduce(0) { $0 + $1.answer.count }
-    }
-
     // MARK: - Sections
 
     /// The four sections, and whatever the model wrote outside them.
     ///
-    /// Parsed on every render from the accumulated text — cheap, pure, and the reason
-    /// the sections stream one at a time with no extra event on the service.
+    /// Parsed on every render from the whole text — cheap, pure, and the reason there is
+    /// no extra event on the service carrying the split.
     ///
     /// **An absent section is absent.** No placeholder, no "not available", no empty
     /// heading. That is `Prompts.wordBudget`'s lesson carried up into the layout: a floor
     /// buys padding and the padding is wrong, and the same is true of a slot. A passage
     /// with no cross-references should look like a passage with three sections, not like
     /// a fourth section that failed.
+    ///
+    /// The `if`s and the `ForEach` that give that behaviour are also what gives the fade:
+    /// they are insertions, so `.transition(.opacity)` is the whole of it.
     @ViewBuilder
     private var sections: some View {
         let annotation = Annotation.parseSections(commentary)
@@ -229,6 +211,7 @@ struct AnnotationPaneView: View {
                 .font(.body)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity)
         }
 
         ForEach(annotation.present, id: \.self) { section in
@@ -265,13 +248,18 @@ struct AnnotationPaneView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .transition(.opacity)
         }
 
-        if !unverifiedCitations.isEmpty {
+        if !unverifiedCitations.isEmpty, !commentary.isEmpty {
             // A named Father, council or document with a locator on it. Reported rather
             // than removed, for `QuoteCheck`'s reason: the text is evidence, and a reader
             // who can see the app flagging its own output learns more than one shown a
             // silently shortened sentence.
+            //
+            // Gated on the commentary too, because the checks run a beat before it is
+            // revealed and "citations above" with nothing above is a warning about
+            // nothing.
             Label(
                 unverifiedCitations.count == 1
                     ? "One citation above is unverified: \(unverifiedCitations[0])"
@@ -343,74 +331,13 @@ struct AnnotationPaneView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// How far the end of the content sits past the end of the viewport.
-    private var distanceBelowFold: CGFloat {
-        contentFrame.maxY - viewportHeight
-    }
-
-    /// Re-arms following and scrolls somewhere other than the end.
-    private func jump(_ scroll: () -> Void) {
-        isFollowing = true
-        isJumping = true
-        scroll()
-    }
-
-    private func follow(_ scroller: ScrollViewProxy) {
-        // `isBusy` is what separates a live stream from a cache hit, which lands the
-        // whole gloss in one assignment and should be read from the top.
-        guard isArmed, isBusy, isFollowing, distanceBelowFold > 0 else { return }
-        // Unanimated, deliberately: this runs once per decoded token, and an
-        // animated scroll per token queues 60 overlapping animations a second.
-        scroller.scrollTo(Self.contentID, anchor: .bottom)
-    }
-
-    /// Content grows downward, so the top edge only moves when someone actually
-    /// scrolls. That is what separates the reader scrolling up to re-read from
-    /// another token arriving underneath them.
-    ///
-    /// Two things move the top with no reader involved: one of the pane's own jumps,
-    /// and the content getting shorter, which makes the scroll view clamp its
-    /// offset. Both are excluded, or following would keep switching itself off.
-    private func track(_ frame: CGRect) {
-        contentFrame = frame
-        defer {
-            lastTop = frame.minY
-            lastHeight = frame.height
-        }
-
-        // Reports arrive a layout pass behind, so a jump is still in flight until
-        // something actually changes; that report is the jump landing, and it is the
-        // one whose moved top has to be forgiven.
-        let landing = isJumping
-        if frame.minY != lastTop || frame.height != lastHeight {
-            isJumping = false
-        }
-
-        if !landing, frame.height >= lastHeight,
-            frame.minY > lastTop + Self.scrollSlack
-        {
-            isFollowing = false
-        } else if frame.maxY - viewportHeight <= Self.pinSlack {
-            isFollowing = true
-        }
-    }
-
     @ViewBuilder
     private func header(_ citation: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(citation)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-
-                // The only sign that work is in flight when the status strip is
-                // hidden, and a cold reasoning phase can run for seconds. Unlabelled, and gone the moment text starts arriving, so it
-                // never competes with the stream.
-                if isBusy, commentary.isEmpty {
-                    ProgressView().controlSize(.small)
-                }
-            }
+            Text(citation)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
 
             // The selected lines are echoed so the reader does not lose the anchor
             // while reading the gloss.
@@ -504,9 +431,6 @@ struct AnnotationPaneView: View {
 
                 ForEach(Array(followUps.enumerated()), id: \.offset) { index, question in
                     Button {
-                        // Tapping is the reader asking to be carried along with the
-                        // answer; until then the pane leaves the scroll position alone.
-                        isArmed = true
                         onAsk(question)
                     } label: {
                         HStack(spacing: 8) {
@@ -579,40 +503,11 @@ struct AnnotationPaneView: View {
     private func submitDraft() {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
-        // Same as tapping a row: asking is the reader opting into being carried along
-        // with the answer.
-        isArmed = true
         draft = ""
         // The keyboard stays here, so one question can be followed by the next. The
         // cost is that the reader pane's arrows, Esc, ⌘C and ⌘R are dead until focus
         // leaves; clicking a line takes it back through `ChapterReaderView.select(_:)`.
         wantsDraftFocus = true
         onAsk(question)
-    }
-}
-
-/// The pane's content frame and its viewport height, in the pane's own coordinate
-/// space. Following the stream needs to know how far the end of the content is
-/// from the end of the viewport, and on macOS 14 a `PreferenceKey` is how you
-/// learn that: `onScrollGeometryChange` and `ScrollPosition` are 15+.
-private struct ContentFrameKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-
-    /// Only one view reports a real frame, but sibling subviews — the scroll
-    /// view's own background layer among them — all contribute the default, and
-    /// they are not visited in any guaranteed order. So keep whichever value is
-    /// not the default rather than the one that happens to come last, the same
-    /// reason `ViewportHeightKey` reduces with `max`.
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if next != .zero { value = next }
-    }
-}
-
-private struct ViewportHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }

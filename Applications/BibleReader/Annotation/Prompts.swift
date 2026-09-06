@@ -469,9 +469,11 @@ enum Prompts {
     /// bullet: appending a correction is exactly what the model does unaided, and it is
     /// not what a revision is for.
     ///
-    /// Answers only. Annotations keep streaming — a reader who has just selected a verse
-    /// has nothing on screen to wait against, where a reader who has tapped a question
-    /// has the annotation in front of them.
+    /// Answers only. Both turns are now withheld until they are whole, but the wait is
+    /// not the same wait: a reader who has just selected a verse has an empty pane and
+    /// nothing to read while the longer of the two generations runs, where a reader who
+    /// has tapped a question has the annotation in front of them. A second pass on turn
+    /// 1 would be paid against the one wait that is already worst.
     static let answerRevision = """
         Now revise that answer. It is above; this is your one chance to change it.
 

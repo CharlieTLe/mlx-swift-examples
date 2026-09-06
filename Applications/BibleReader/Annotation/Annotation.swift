@@ -48,12 +48,12 @@ struct Annotation: Equatable, Sendable {
 
     /// Splits raw model output on the four markers.
     ///
-    /// **Safe on a partial string**, which is what makes the sections stream. The pane
-    /// re-parses on every chunk, so a half-written `THE TRADITION` renders as a
-    /// half-written tradition section rather than as nothing — and the sections appear
-    /// one by one as the model reaches them. That is why there is no `.section` event on
-    /// the service: the accumulated text is the state, and parsing is a pure function of
-    /// it, so nothing has to be kept in step.
+    /// **Safe on a partial string**, which is what lets a run cut short still reach the
+    /// reader: a generation stopped by Esc or by the token budget leaves a half-written
+    /// `THE TRADITION`, and it renders as a half-written tradition section rather than
+    /// as nothing. That is also why there is no `.section` event on the service: the
+    /// text is the state, and parsing is a pure function of it, so nothing has to be
+    /// kept in step.
     ///
     /// Order-independent by construction: the markers are located wherever they are and
     /// each section runs to the next one found, not to the next one expected.

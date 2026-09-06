@@ -25,6 +25,25 @@ enum Phase: Equatable, Sendable {
     /// The answer draft is written and is being revised before the reader sees it.
     /// The one turn with an edit channel; see `Prompts.answerRevision`.
     case revising
+
+    /// What the pane says while the reader waits, or `nil` for a state with nothing
+    /// to say. The commentary is held back until it is whole, so this is the only
+    /// thing on screen for the length of a generation.
+    ///
+    /// Deliberately not `ContentView.statusStrip`'s copy, which names the machinery
+    /// for someone working on the app. This names the work for someone waiting on it,
+    /// which is why `.prefilling` and `.streaming` do not read as one stage and
+    /// `.answering` and `.revising` do: the reader has no stake in the draft being
+    /// rewritten, only in the answer taking a moment.
+    var label: String? {
+        switch self {
+        case .idle, .cached: nil
+        case .prefilling: "Reading the passage…"
+        case .streaming: "Annotating…"
+        case .answering, .revising: "Answering…"
+        case .listingFollowUps: "Finding what to ask next…"
+        }
+    }
 }
 
 struct GenerationStats: Sendable, Equatable {
@@ -476,7 +495,8 @@ final class AnnotationService {
                         tokensPerSecond: current.tokensPerSecond),
                     for: current.key)
             } catch is CancellationError {
-                // Stopped by the reader; whatever streamed already stays on screen.
+                // Stopped by the reader; whatever was written before the stop is still
+                // revealed, by the fallback at the end of `ContentView.start(_:)`'s loop.
             } catch {
                 continuation.yield(.failed(String(describing: error)))
             }

@@ -991,7 +991,8 @@ enum SelfTest {
             parsed.preamble, "Abram believed, and it was counted to him.",
             "an unformatted run is kept whole")
 
-        // Partial, which is what every intermediate render during streaming looks like.
+        // Partial, which is what a generation stopped by Esc or by the token budget
+        // leaves behind — and it is still shown, so it still has to parse.
         // A half-written section is a half-written section, not nothing.
         parsed = Annotation.parseSections("PLAIN SENSE: Abram tru")
         log.equal(parsed.plainSense, "Abram tru", "a mid-word partial")

@@ -449,6 +449,7 @@ struct ContentView: View {
                 followUps: followUps,
                 transcript: transcript,
                 isBusy: isBusy,
+                status: phase.label,
                 references: references,
                 unverifiedCitations: unverifiedCitations,
                 onAsk: ask,
@@ -1170,20 +1171,56 @@ struct ContentView: View {
     private func start(_ built: PassageContext, ignoringCache: Bool) {
         let started = Date()
         Task {
+            // The annotation is accumulated here and published once, so the reader
+            // gets four finished sections rather than four sections assembling
+            // themselves a word at a time. Buffered in the view and never in
+            // `AnnotationService`: the per-token deltas are what `Benchmark.run`
+            // measures time-to-first-token from, and what stamps `timeToFirstToken`
+            // below.
+            var buffered = ""
+            var revealed = false
+            // The phase the chunks arrived under — `.streaming` here. Any other phase
+            // afterwards means the prose is finished.
+            var generating: Phase?
+
+            // Publishes the buffer, once.
+            @MainActor func reveal() {
+                guard !revealed, !buffered.isEmpty else { return }
+                revealed = true
+                // Only into the pane this stream was started for. A generation still
+                // draining after Esc or a new selection would otherwise resurrect a
+                // whole gloss into a pane that has moved on.
+                guard context?.isSamePassage(as: built) == true else { return }
+                withAnimation(.easeIn(duration: 0.22)) { commentary = buffered }
+            }
+
             for await event in await service.annotate(built, ignoringCache: ignoringCache) {
                 switch event {
                 case .cached(let entry):
+                    // Outside `withAnimation`, deliberately: a fade says "this was just
+                    // written", and a cache hit was not. It is also instant, so there is
+                    // nothing for a fade to cover.
                     commentary = entry.commentary
                     promptTokens = entry.promptTokenCount
                 case .phase(let value):
+                    // **When the prose ends, not when the stream ends.** A whole
+                    // follow-up generation runs after the last chunk, and waiting for
+                    // the loop to close would hold a finished annotation back through
+                    // one to two seconds of it. `.streaming` is re-yielded per chunk, so
+                    // the first phase that is not the generating one is exactly the end
+                    // of the text.
+                    if let generating, value != generating { reveal() }
                     phase = value
                 case .promptTokens(let count):
                     promptTokens = count
                 case .commentary(let chunk):
+                    // Stamped on chunk arrival and not on the reveal: this is the
+                    // model's first token, which is what the diagnostics strip means.
                     if timeToFirstToken == nil {
                         timeToFirstToken = Date().timeIntervalSince(started)
                     }
-                    commentary += chunk
+                    generating = phase
+                    buffered += chunk
                 case .answer:
                     break
                 case .followUps(let questions):
@@ -1206,9 +1243,14 @@ struct ContentView: View {
                     errorMessage = message
                 }
             }
-            // The one place a queued word question is fired. By here the service's stream
-            // has closed, which means its final `.phase(.idle)` has already landed, so
-            // `ask(_:)`'s `!isBusy` guard passes.
+            // Load-bearing, not defensive: a cancelled or truncated run takes an early
+            // return that finishes the stream with no further phase event at all. What
+            // it managed to write is evidence, and evidence is not deleted here.
+            reveal()
+            // The one place a queued word question is fired, and after the reveal so the
+            // annotation is on screen before the question about it is appended below it.
+            // By here the service's stream has closed, which means its final
+            // `.phase(.idle)` has already landed, so `ask(_:)`'s `!isBusy` guard passes.
             if let question = pendingWordQuestion {
                 pendingWordQuestion = nil
                 ask(question)
@@ -1228,12 +1270,38 @@ struct ContentView: View {
         followUps = []
 
         Task {
+            // The same buffer-and-reveal as `start(_:ignoringCache:)`, one turn later.
+            // Here the chunks arrive under `.revising` and the phase that follows them is
+            // `.listingFollowUps`; the draft turn before them is already silent.
+            var buffered = ""
+            var revealed = false
+            var generating: Phase?
+
+            @MainActor func reveal() {
+                guard !revealed, !buffered.isEmpty else { return }
+                revealed = true
+                // `clearAnnotation()` empties the transcript, so Esc or a new selection
+                // leaves a still-draining stream with no row to write into. Indexing one
+                // anyway is an out-of-range crash.
+                guard index < transcript.count else { return }
+                withAnimation(.easeIn(duration: 0.22)) {
+                    transcript[index].answer = buffered
+                }
+            }
+
             for await event in service.answer(question) {
                 switch event {
                 case .phase(let value):
+                    if let generating, value != generating { reveal() }
                     phase = value
                 case .answer(let chunk):
-                    transcript[index].answer += chunk
+                    // `+=`, because `.answer` is polymorphic: the revision yields
+                    // tokens, and the fallback for a revision that came back empty
+                    // yields the whole draft as one value. Appending is right for both,
+                    // since the second only follows the whitespace the first was
+                    // discarded for.
+                    generating = phase
+                    buffered += chunk
                 case .followUps(let questions):
                     followUps = questions
                 case .stats(let value):
@@ -1252,6 +1320,7 @@ struct ContentView: View {
                     break
                 }
             }
+            reveal()
         }
     }
 
