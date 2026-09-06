@@ -24,6 +24,14 @@ examples use models implemented in [MLX Swift LM](https://github.com/ml-explore/
   `ChatSession` alive across a multi-turn exchange; the corpus ships with the app, so
   after the model download there are no network calls.
 
+- [PatentReader](Applications/PatentReader/README.md): An example that runs on macOS,
+  iPhone and iPad and answers questions about a library of patents on-device. Combines a
+  local embedder (MLXEmbedders) with a local LLM: a hybrid dense + BM25 index finds the
+  relevant paragraphs, a 4B LLM writes prose that cites them, and clicking a citation
+  lands on that passage in the document pane. Shows how to hold two models in one memory
+  budget, how to parse a streamed answer into tappable citations without them flickering
+  half-formed, and how to check every citation against what the model was actually shown.
+
 - [LoRATrainingExample](Applications/LoRATrainingExample/README.md): An example that runs on macOS that downloads an LLM and fine-tunes it using LoRA (Low-Rank Adaptation) with training data.
 
 - [LinearModelTraining](Tools/LinearModelTraining/README.md): An example that

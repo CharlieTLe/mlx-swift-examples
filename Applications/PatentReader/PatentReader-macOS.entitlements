@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Empty on purpose, and this file is worth reading before anyone "fixes" it. The Mac
+     app fetches patents over the network and reads PDFs the reader drops on it, and
+     both of those are exactly the shape of thing that makes an engineer reach for the
+     App Sandbox checkbox. That would be a mistake here, for four reasons.
+
+     1. **App Sandbox is off, as it is for ShakespeareReader, and for the same reason.**
+        `AnswerService.downloader` takes swift-huggingface's default on macOS,
+        `~/.cache/huggingface/hub`, shared with every other MLX tool and with Python's
+        `huggingface_hub`. Sandboxing redirects that into `~/Library/Containers/`, so a
+        first launch re-downloads weights already sitting on disk. That cost is *larger*
+        here than next door: PatentReader loads Qwen3-4B (2.2 GB) and
+        nomic-embed-text-v1.5 (~550 MB), and with the sandbox off it shares the first
+        with ShakespeareReader and the second with `Tools/embedder-tool`, so a machine
+        that has run either pays for neither.
+
+     2. **Network access therefore needs no entitlement.**
+        `com.apple.security.network.client` exists to *re-permit* what the sandbox takes
+        away; with no sandbox there is nothing to re-permit. Adding it would be cargo
+        cult — it is inert outside a sandbox — and would suggest a containment this
+        target does not have.
+
+     3. **Nor do user-selected file reads.** `com.apple.security.files.user-selected.
+        read-only` is likewise a sandbox exception. A dropped PDF and a `.fileImporter`
+        URL are both ordinary file reads here.
+
+     4. **Hardened runtime is on and needs no exception.** It restricts code injection,
+        library loading, JIT and debugger attachment, never filesystem or network. MLX
+        compiles Metal libraries at runtime through `MTLDevice.makeLibrary(source:)` and
+        the out-of-process compiler, so there are no `MAP_JIT` pages and no
+        `com.apple.security.cs.allow-jit`. Debug builds still get `get-task-allow`
+        merged in by `CODE_SIGN_INJECT_BASE_ENTITLEMENTS`, so lldb attaches.
+
+     The counter-argument, stated fairly rather than waved away: an app that fetches
+     arbitrary URLs and parses somebody else's HTML is a good candidate for a sandbox,
+     and if this ever shipped outside an examples repo it should have one. The trade is
+     explicit — a container costs a 2.75 GB re-download on first launch — and this file
+     is where that trade is recorded rather than rediscovered. -->
+<dict/>
+</plist>
