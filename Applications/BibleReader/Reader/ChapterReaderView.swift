@@ -48,6 +48,11 @@ struct ChapterReaderView: View {
     let onCancel: () -> Void
     let onRegenerate: () -> Void
 
+    /// ⌘⇧R — a passage drawn at random, landed on and annotated in one press. The shortcut
+    /// hangs off the stack below rather than off the Mac header's button and the iOS menu
+    /// row, so it is registered in one place and works at both widths.
+    let onRandomPassage: () -> Void
+
     /// Rolls into the neighbouring chapter when an arrow key runs off the edge of this
     /// one: `+1` forward, `-1` back. Stops at the ends of the Bible, since crossing into
     /// another book is the navigator's job.
@@ -272,6 +277,8 @@ struct ChapterReaderView: View {
                 Button("Back", action: onGoBack)
                     .keyboardShortcut("[", modifiers: .command)
                     .disabled(!canGoBack)
+                Button("Random Passage", action: onRandomPassage)
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
             }
             .opacity(0)
             .frame(width: 0, height: 0)

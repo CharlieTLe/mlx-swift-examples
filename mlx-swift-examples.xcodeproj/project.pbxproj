@@ -499,6 +499,7 @@
 				BibleReader/Corpus/BookTable.swift,
 				BibleReader/Corpus/CorpusLoader.swift,
 				BibleReader/Corpus/PsalmNumbering.swift,
+				BibleReader/Corpus/RandomPassage.swift,
 				BibleReader/Corpus/Reference.swift,
 				BibleReader/Platform/DictionaryLookup.swift,
 				BibleReader/Platform/PlatformCompat.swift,

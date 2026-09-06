@@ -246,6 +246,7 @@ python3 tools/build_corpus.py --dump-chapter psalms:118
 | ⌘F | find a book or type a reference |
 | ⌘A | select the whole chapter |
 | ⌘R | regenerate |
+| ⌘⇧R | draw a random passage and annotate it |
 | ⌘[ | back, after following a cross-reference |
 | ⌘C | copy the passage with its citation |
 | ↑ ↓ | move the selection; shift extends; running off the end rolls into the next chapter |
@@ -255,6 +256,30 @@ Double-click selects the whole **syntactic period** rather than one verse, which
 more here than the equivalent did for a speech: Douay-Rheims verses are frequently
 mid-sentence. Genesis 15:19-21 is literally *"The Cineans, and Cenezites, the
 Cedmonites," / "And the Hethites…" / "And the Amorrhites…"* — three verses, one list.
+
+## The draw
+
+⌘⇧R, the header's shuffle button and the iOS overflow menu's first row all do the same
+thing: land on a passage and annotate it in one press. It is the app's front door — every
+other way in requires the reader to already know where they are going — and the fastest
+way to see the annotation layer working at all. A draw selects the whole syntactic period,
+not a bare verse, and pushes onto the back stack, so ⌘[ returns.
+
+**The pool is note-anchored rather than uniform**, which is the non-obvious decision.
+Three draws in four are uniform over the **1,764** verses Challoner himself hung a note
+on. That is not a highlights reel: those verses span **72 of the 73 books** — only
+Philemon, a single chapter, has none — and the largest single share is Psalms at about 8%.
+It is also the pool where the annotation is worth reading, since a note-anchored passage
+puts Challoner's own note in the prompt as the stated authority: retrieve-and-explain,
+which is the case a 4B model does well, rather than recall, which is the case it does
+badly. A uniform draw over all 35,805 verses would land in a genealogy or a tribal
+allotment most presses.
+
+The fourth draw is verse-uniform over every verse of a chapter that carries an argument,
+so the whole Bible stays reachable and the button is not silently a bookmark list.
+Verse-uniform and not chapter-uniform deliberately: drawing a chapter first would give
+each of Abdias' 21 verses 150× the odds of a verse of Psalms. The last 25 draws are
+skipped, so a dozen presses do not repeat.
 
 ## Limitations
 
@@ -329,6 +354,7 @@ decodes but is subtly wrong, and prompt drift.
 | `referenceCheck` | all three verdicts, Protestant aliases, and the quoted-verse haystack |
 | `patristicCheck` | the generic/specific line, drawn on the same Father in the same sentence |
 | `crossReferences` | **every** reference the app would put in a prompt, swept across the whole corpus |
+| `randomPassage` | the 1,764 / 72-book anchor pool, that **every** anchor resolves, the tier-2 prefix sum, and 400 draws with no repeat inside the ring |
 | `followUpParsing` | every way the model breaks "four numbered lines and nothing else" |
 | `goldenPromptRender` | one assembled prompt, byte for byte — **regenerate on every `Prompts.version` bump** |
 

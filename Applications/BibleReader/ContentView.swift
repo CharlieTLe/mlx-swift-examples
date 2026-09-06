@@ -12,6 +12,9 @@ struct ContentView: View {
     @State private var bible: Bible?
     @State private var table: BookTable?
     @State private var crossReferences: CrossReferenceStore?
+    /// The shuffle button's two-tier draw, and the short ring of what it has already
+    /// landed on. Built from the corpus beside the store above.
+    @State private var randomPassages: RandomPassage?
     @State private var corpusError: String?
 
     @State private var chapterKey: ChapterKey?
@@ -409,6 +412,7 @@ struct ContentView: View {
             },
             onCancel: { cancel() },
             onRegenerate: { regenerate() },
+            onRandomPassage: { drawRandomPassage() },
             onStepChapter: { step in stepChapter(step, in: bible) },
             onGoBack: { goBack() },
             canGoBack: history.canGoBack,
@@ -506,6 +510,16 @@ struct ContentView: View {
 
                 typefaceMenu
 
+                // `shuffle` rather than a die face: it is the conventional "random item"
+                // glyph, and it carries no imagery this particular text would colour.
+                Button(action: drawRandomPassage) {
+                    Image(systemName: "shuffle")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!service.isReady || isBusy)
+                .help("Draw a random passage (⌘⇧R)")
+                .accessibilityLabel("Random passage")
+
                 if showsDiagnostics {
                     Text("\(shortModelName) · on-device")
                         .font(.caption)
@@ -556,6 +570,9 @@ struct ContentView: View {
         @ViewBuilder
         private var overflowMenu: some View {
             Menu {
+                Button("Random passage", systemImage: "shuffle") { drawRandomPassage() }
+                    .disabled(!service.isReady || isBusy)
+                Divider()
                 Button("Regenerate", systemImage: "arrow.clockwise") { regenerate() }
                     .disabled(selection == nil || isBusy)
                 Button("Select chapter", systemImage: "text.justify") { selectChapter() }
@@ -934,6 +951,7 @@ struct ContentView: View {
             bible = loaded
             table = names
             crossReferences = CrossReferenceStore(bible: loaded, table: names)
+            randomPassages = RandomPassage(bible: loaded)
             // The checks need the corpus to resolve a reference against, and building the
             // normalized haystack is a tenth of a second — paid once, here, rather than
             // on the first annotation.
@@ -1403,6 +1421,53 @@ struct ContentView: View {
         // a word is a request to be told something, exactly as pointing at a passage is.
         let selected = VerseSelection(at: index)
         pendingWordQuestion = question
+        selection = selected
+        commit(
+            selected, book: book, key: chapterKey, chapter: chapter,
+            revealingCommentary: true)
+    }
+
+    // MARK: - Random passage
+
+    /// ⌘⇧R, the shuffle button, and the iOS overflow menu's first row: land on a passage
+    /// and annotate it in the same press.
+    ///
+    /// The app's front door. Every other way in — a book in the navigator, a reference
+    /// typed into the find field, a cross-reference followed out of the commentary —
+    /// requires the reader to already know where they are going, and this is also the
+    /// fastest way to see the annotation layer working at all.
+    ///
+    /// Guarded on `isBusy` rather than cancelling what is running: a cancel here would
+    /// have to survive the early-return paths in `AnnotationService` that finish a stream
+    /// without a final `.phase(.idle)`, and a shuffle that is inert for two seconds is
+    /// better than one that strands the annotation before it.
+    private func drawRandomPassage() {
+        guard service.isReady, !isBusy, let bible,
+            let reference = randomPassages?.draw()
+        else { return }
+
+        // `open(_:)` does the chapter change, the selection, the scroll reveal and — with
+        // `pushingHistory` — the ⌘[ entry. A random jump is precisely the deliberate jump
+        // `NavigationHistory` was built for: the reader did not walk here, so walking back
+        // is not available to them.
+        open(reference, pushingHistory: true)
+
+        // Re-resolved rather than carried out of `open(_:)`, because a draw hands back a
+        // reference and a selection holds *rendered* row indices — the two disagree by one
+        // per note whenever Challoner is turned off. Widened to the period for the reason
+        // double-click is: a Douay-Rheims verse is frequently half a sentence.
+        guard let chapterKey, let book = bible.book(chapterKey.bookID),
+            let chapter = bible.chapter(chapterKey),
+            let rows = renderedRows(),
+            let index = rowIndex(of: reference, in: bible)
+        else { return }
+
+        // Selected by hand from out here, as `explainWord(_:atRow:)` is: the reader's
+        // 350 ms commit debounce only covers `ChapterReaderView`'s own gestures, so
+        // writing `selection` from this side commits nothing on its own. Revealing the
+        // commentary, because asking for a passage at random is a request to be told
+        // something about it.
+        let selected = VerseSelection.period(at: index, in: rows)
         selection = selected
         commit(
             selected, book: book, key: chapterKey, chapter: chapter,

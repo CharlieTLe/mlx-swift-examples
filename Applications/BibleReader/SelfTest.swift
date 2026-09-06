@@ -49,6 +49,7 @@ enum SelfTest {
         referenceLinks(log)
         patristicCheck(log)
         crossReferences(log)
+        randomPassage(log)
         followUpParsing(log)
         goldenPromptRender(log)
 
@@ -1439,6 +1440,101 @@ enum SelfTest {
         log.check(
             named.contains(ScriptureReference(bookID: "genesis", chapter: 2, verse: 24)),
             "`Gen. 2.24` should resolve to Genesis 2:24")
+    }
+
+    // MARK: - Random passage
+
+    /// The shuffle button's two pools, as literal regression targets.
+    ///
+    /// 1,764 note-anchored verses across 72 of the 73 books — only Philemon, a single
+    /// chapter, carries none. Pinned the way `corpus` pins 73 / 1,334 / 35,805: a parser
+    /// change that dropped half the notes would leave the button working and quietly make
+    /// it a much narrower thing.
+    private static let anchoredVerses = 1764
+    private static let anchoredBooks = 72
+
+    private static func randomPassage(_ log: Log) {
+        guard let bible = try? CorpusLoader.load() else {
+            log.fail("could not load the corpus for the random-passage checks")
+            return
+        }
+        var draws = RandomPassage(bible: bible)
+
+        // MARK: Tier 1 — the anchors
+
+        log.equal(draws.anchors.count, anchoredVerses, "note-anchored verses")
+        log.equal(
+            Set(draws.anchors.map(\.bookID)).count, anchoredBooks,
+            "books carrying a note-anchored verse")
+
+        // The sweep `crossReferences` does for prompt references, for the same reason: a
+        // reference that does not resolve is a press of the button that lands nowhere,
+        // and nothing else would say so.
+        for anchor in draws.anchors {
+            log.check(
+                bible.rowIndex(of: anchor) != nil,
+                "anchor \(anchor.bookID) \(anchor.chapter):\(anchor.verse ?? 0) "
+                    + "does not resolve")
+        }
+
+        // MARK: Tier 2 — the prefix sum
+
+        log.equal(
+            draws.keys.count, draws.cumulative.count,
+            "the tier-2 chapter list against its prefix sum")
+        log.check(!draws.keys.isEmpty, "tier 2 has no chapters at all")
+
+        var running = 0
+        for (offset, key) in draws.keys.enumerated() {
+            guard let chapter = bible.chapter(key) else {
+                log.fail("tier-2 chapter \(key.slug) does not resolve")
+                continue
+            }
+            // Both halves of what tier 2 is filtered on. A chapter with no argument would
+            // be one the model is asked to explain cold; one with no verses would be a
+            // zero-width span of the prefix sum that no draw can ever land in.
+            log.check(chapter.argument != nil, "tier-2 chapter \(key.slug) has no argument")
+            log.check(chapter.verseCount > 0, "tier-2 chapter \(key.slug) has no verses")
+            running += chapter.verseCount
+            log.equal(
+                draws.cumulative[offset], running,
+                "the prefix sum at \(key.slug)")
+        }
+        log.equal(draws.cumulative.last, running, "the tier-2 pool's verse count")
+
+        // MARK: The draw
+
+        // A few hundred presses. Every one has to resolve, and none may repeat inside the
+        // ring — which is the whole reason the ring exists: a dozen presses in one sitting
+        // that came back to the same verse would be noticed immediately.
+        var window: [ScriptureReference] = []
+        let anchored = Set(draws.anchors)
+        var reachedOutsideTheAnchors = false
+        for press in 0 ..< 400 {
+            guard let drawn = draws.draw() else {
+                log.fail("draw \(press) came back empty")
+                break
+            }
+            log.check(
+                bible.rowIndex(of: drawn) != nil,
+                "draw \(press) — \(drawn.bookID) \(drawn.chapter):\(drawn.verse ?? 0) — "
+                    + "does not resolve")
+            log.check(
+                !window.contains(drawn),
+                "draw \(press) repeated \(drawn.bookID) \(drawn.chapter):"
+                    + "\(drawn.verse ?? 0) inside the \(RandomPassage.ring)-draw ring")
+            if !anchored.contains(drawn) { reachedOutsideTheAnchors = true }
+            window.append(drawn)
+            if window.count > RandomPassage.ring { window.removeFirst() }
+        }
+
+        // And that the button is not silently a bookmark list. One draw in four is
+        // verse-uniform over the whole Bible, of which the anchors are 5%, so 400 presses
+        // that never once left them would mean tier 2 is unreachable.
+        log.check(
+            reachedOutsideTheAnchors,
+            "no draw in 400 came from outside the anchors, so tier 2 — the whole Bible — "
+                + "may be unreachable")
     }
 
     // MARK: - Follow-up parsing
