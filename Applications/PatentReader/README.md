@@ -90,10 +90,19 @@ wide. The HTML gives paragraph numbers, the claim dependency graph and reference
 as *data*; the PDF gives text, and everything else has to be reconstructed from regular
 expressions. Use the number where you have one.
 
-The PDF path refuses rather than importing something wrong in two cases, both of which
+The PDF path refuses rather than importing something wrong in three cases, all of which
 produce a document that would look fine and be useless: a PDF with **no text layer** (a
-scanned pre-1976 grant) and one whose recovered `[nnnn]` numbers are **not ascending**,
-which means the two columns were read interleaved and the paragraphs would be shuffled.
+scanned pre-1976 grant), one whose recovered `[nnnn]` numbers are **not ascending**, which
+means the two columns were read interleaved and the paragraphs would be shuffled, and one
+where a single paragraph comes out holding **most of the document**, which means the
+paragraph breaks stopped being found and everything after that point was merged into one
+row that every citation would then name.
+
+That third one is what a grant PDF off Google's own servers does: they are OCR, `[0001]`
+comes out as `0001.` with the brackets gone, and there is nothing left to break on. Those
+are exactly the documents to fetch by number instead. A PCT publication is the case the
+PDF path handles well — WIPO writes the marker as `00` and the number, so one document
+prints `[001]`, `[0010]` and `[00100]`, and the width is a range for that reason.
 
 ### The markup is not uniform, and that shaped the model
 

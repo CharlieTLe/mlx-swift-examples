@@ -20,9 +20,12 @@ import PDFKit
 ///   servers is a scan. Extraction returns a handful of characters or none, and the
 ///   right answer is to say so — "this PDF has no text layer" — not to index an empty
 ///   patent that then answers every question with silence.
-/// - **Paragraph numbers may be absent.** They are printed as `[0001]` from 2001
-///   onwards and not before, and the fallback is `Numbering.synthesized`, which the
-///   citation then admits to. Same machinery the HTML path uses for the same reason.
+/// - **Paragraph numbers may be absent, and their width is not fixed.** They are printed
+///   from 2001 onwards and not before, and the fallback is `Numbering.synthesized`, which
+///   the citation then admits to. Where they are printed, USPTO pads to four — `[0001]` —
+///   and WIPO pads to three and then grows, so one PCT publication runs `[001]`, `[0010]`
+///   and `[00100]`. Matching one width silently keeps the middle band and merges the
+///   rest, so the width is a range and `paragraphsMerged` is the net beneath it.
 /// - **Two columns.** `PDFPage.string` reads a USPTO grant in content-stream order,
 ///   which is *usually* column by column and is not guaranteed. The `[nnnn]` sequence is
 ///   the check: if the recovered numbers are not strictly ascending, the columns were
@@ -33,12 +36,13 @@ enum PatentPDFImporter {
     /// Bump alongside `GooglePatentsParser.version` when a change here alters the
     /// `Patent` a given PDF produces. Separate counter, same job: it invalidates the
     /// index.
-    static let version = 1
+    static let version = 2
 
     enum Failure: LocalizedError, Equatable {
         case unreadable(String)
         case noTextLayer(pages: Int, characters: Int)
         case columnsOutOfOrder(at: Int, after: Int)
+        case paragraphsMerged(number: Int, percent: Int)
         case tooShort(characters: Int)
 
         var errorDescription: String? {
@@ -54,6 +58,13 @@ enum PatentPDFImporter {
                     + "[\(String(format: "%04d", after))], so the two columns were read "
                     + "interleaved rather than one after the other. The paragraphs would "
                     + "be shuffled, so this import is refused. Import from Google "
+                    + "Patents by number instead."
+            case .paragraphsMerged(let number, let percent):
+                "Paragraph \(number) came out holding \(percent)% of the document's "
+                    + "text, so the paragraph breaks stopped being recognised there and "
+                    + "everything after it was merged into it. The reader would show that "
+                    + "as one unreadable row and every citation into it would name the "
+                    + "same paragraph, so this import is refused. Import from Google "
                     + "Patents by number instead."
             case .tooShort(let characters):
                 "Only \(characters) characters of text were recovered, which is too "
@@ -73,6 +84,15 @@ enum PatentPDFImporter {
 
     /// A whole specification under this is not one.
     private static let minimumCharacters = 500
+
+    /// Above this share of the recovered text in one paragraph, the paragraph breaks were
+    /// misread rather than that paragraph being long. See `checkMerged`.
+    private static let mergedShare = 0.5
+
+    /// ...and only once that paragraph is this long in absolute terms. Some 3,000 words,
+    /// which is past anything an office prints as one paragraph, so a document that is
+    /// legitimately one or two paragraphs is not refused for being short.
+    private static let mergedMinimum = 20_000
 
     static func load(_ url: URL, title fallbackTitle: String? = nil) throws -> Patent {
         guard let document = PDFDocument(url: url) else {
@@ -98,20 +118,34 @@ enum PatentPDFImporter {
         let lines = joined.split(separator: "\n", omittingEmptySubsequences: false)
             .map { String($0).trimmingCharacters(in: .whitespaces) }
 
+        return try patent(from: lines, url: url, title: fallbackTitle)
+    }
+
+    /// The recovery itself, from the extracted lines.
+    ///
+    /// Split from `load` so `SelfTest` can drive it. What is worth asserting is which
+    /// line starts a paragraph, where the claims begin and which number off the cover
+    /// page is the document's; building a PDF to assert that through would be asserting
+    /// PDFKit.
+    static func patent(from lines: [String], url: URL, title fallbackTitle: String?) throws
+        -> Patent
+    {
         let key =
             number(in: lines) ?? PatentNumberParser.parse(
                 url.deletingPathExtension().lastPathComponent)
             ?? PatentKey(country: "US", serial: "000000", kind: nil)
 
-        let (paragraphs, numbering) = try self.paragraphs(in: lines)
-        // The claims are paragraphs too until something tells them apart, and the
-        // preamble line is that something. Everything from it onwards becomes claims and
-        // everything before it stays specification, so a paragraph is never both — which
-        // it would be if the claims were merely *also* extracted, and the reader would
-        // scroll past the claims twice.
-        let boundary = claimSectionStart(in: paragraphs)
-        let claims = self.claims(from: Array(paragraphs[(boundary ?? paragraphs.count)...]))
-        let spec = Array(paragraphs[..<(boundary ?? paragraphs.count)])
+        // The claims are cut off the end *before* the paragraphs are recovered, rather
+        // than picked out of them afterwards. They have to be: a claim carries no
+        // `[nnnn]` marker of its own, so left in place the entire claim set is
+        // continuation text and lands inside whichever specification paragraph happened
+        // to be last. Cutting first also means a paragraph is never both, which it would
+        // be if the claims were merely *also* extracted, and the reader would scroll past
+        // the claims twice.
+        let boundary = claimSectionStart(in: lines)
+        let claims = self.claims(in: Array(lines[(boundary ?? lines.count)...]))
+        let (spec, numbering) = try paragraphs(in: Array(lines[..<(boundary ?? lines.count)]))
+        try checkMerged(spec)
 
         return Patent(
             schemaVersion: 1,
@@ -130,7 +164,7 @@ enum PatentPDFImporter {
                 kind: .pdf,
                 url: url.absoluteString,
                 retrieved: Date(),
-                contentSHA256: GooglePatentsParser.digest(of: joined),
+                contentSHA256: GooglePatentsParser.digest(of: lines.joined(separator: "\n")),
                 parserVersion: version,
                 note: note(numbering: numbering, claims: claims.count)),
             // One unnamed section: a PDF's headings are typography, and telling a
@@ -170,8 +204,14 @@ enum PatentPDFImporter {
     /// Anchored at the start of a line, which is what makes it safe: `[0001]` inside a
     /// sentence is a citation to another paragraph and not the start of one, and patents
     /// contain those.
+    ///
+    /// Three to five digits, because the padding is not a constant. USPTO pads to four
+    /// and WIPO pads to three, so a PCT publication that runs past paragraph 99 prints
+    /// `[001]`, `[0010]` and `[00100]` in the same document and only the middle band is
+    /// four digits wide. Widening does not cost precision — the strictly-ascending check
+    /// below is what rejects a false match, and it is unchanged.
     private static func paragraphs(in lines: [String]) throws -> ([Paragraph], Numbering) {
-        let marker = /^\[(\d{4})\]\s*(.*)$/
+        let marker = /^\[(\d{3,5})\]\s*(.*)$/
 
         var numbered: [(number: Int, text: String)] = []
         var current: (number: Int, text: String)?
@@ -204,6 +244,36 @@ enum PatentPDFImporter {
                 hasPrintedNumber: true)
         }
         return (paragraphs, .printed)
+    }
+
+    /// Refuses an import in which one paragraph swallowed the rest of the document.
+    ///
+    /// The same kind of check as `columnsOutOfOrder`, for the same reason. The paragraph
+    /// breaks are the only structure this recovery has, and when they stop being found —
+    /// a marker scheme it does not know, an OCR'd grant where `[0001]` came out as
+    /// `0001.` and the brackets are simply gone, a file with no blank lines to fall back
+    /// on — *nothing fails*. Every later line is appended to the last paragraph that did
+    /// break, and the result imports cleanly, shows one unreadable row, and answers every
+    /// question with a citation to the same paragraph. Silent, so it has to be looked for
+    /// rather than waited for.
+    ///
+    /// Share of the text rather than a multiple of the median, because patents do have
+    /// long paragraphs — a table, a sequence listing — and a long paragraph is only
+    /// suspicious when it is most of the document. The absolute floor is what makes the
+    /// share safe to trust: 20,000 characters is some 3,000 words, which no paragraph any
+    /// office prints comes near, so a short document that is legitimately one or two
+    /// paragraphs is not refused for being short.
+    private static func checkMerged(_ paragraphs: [Paragraph]) throws {
+        let lengths = paragraphs.map(\.text.count)
+        let total = lengths.reduce(0, +)
+        guard let largest = lengths.max(), let index = lengths.firstIndex(of: largest),
+            largest >= mergedMinimum, total > 0
+        else { return }
+
+        let share = Double(largest) / Double(total)
+        guard share > mergedShare else { return }
+        throw Failure.paragraphsMerged(
+            number: paragraphs[index].number, percent: Int((share * 100).rounded()))
     }
 
     /// Paragraphs from blank lines, for a document with no markers.
@@ -253,45 +323,77 @@ enum PatentPDFImporter {
 
     // MARK: - Claims
 
-    /// Where the claims begin: the paragraph opening with the claim preamble.
+    /// The claim preamble, which both marks the boundary and gets stripped off it.
     ///
-    /// Every US grant prints one — "What is claimed is:", "We claim:" — and it is the
-    /// only reliable boundary in extracted text. A document with none has no claims this
-    /// importer will recognise, and `Source.note` says so rather than the reader
-    /// discovering it by finding no Claims section.
-    private static func claimSectionStart(in paragraphs: [Paragraph]) -> Int? {
-        let preamble = /^(what is claimed is|we claim|i claim|the invention claimed is)/
+    /// Computed rather than stored because `Regex` is not `Sendable`, and one shared
+    /// across the two places that need it beats two spellings that could drift apart.
+    private static var claimPreamble: Regex<Substring> {
+        /^(?:what is claimed is|we claim|i claim|the invention claimed is)\s*:?\s*/
             .ignoresCase()
-        return paragraphs.firstIndex {
-            (try? preamble.prefixMatch(in: $0.text)) != nil
-        }
     }
 
-    /// The claims, recovered from their own numbering.
+    /// Where the claims begin: the line opening with the claim preamble.
     ///
-    /// Split on a leading `N.` where `N` is the *next expected* number. Requiring the
-    /// next one rather than any number is what keeps "35 U.S.C. 112" and a stray "2." in
-    /// prose out of the claim list: a sequence has to be a sequence, and a number out of
-    /// turn is text.
-    private static func claims(from paragraphs: [Paragraph]) -> [Claim] {
-        guard !paragraphs.isEmpty else { return [] }
+    /// Every US grant and every PCT publication prints one — "What is claimed is:", "We
+    /// claim:" — and it is the only reliable boundary in extracted text. A document with
+    /// none has no claims this importer will recognise, and `Source.note` says so rather
+    /// than the reader discovering it by finding no Claims section.
+    ///
+    /// A line rather than a paragraph, because the claims have to be cut off *before*
+    /// paragraph recovery runs: a claim carries no `[nnnn]` marker, so by the time there
+    /// are paragraphs the preamble is buried mid-paragraph and there is no boundary left
+    /// to find.
+    private static func claimSectionStart(in lines: [String]) -> Int? {
+        lines.firstIndex { (try? claimPreamble.prefixMatch(in: $0)) != nil }
+    }
 
+    /// The claims, recovered from their own numbering, given the lines from the preamble
+    /// onwards.
+    ///
+    /// Split on a line opening with `N.` where `N` is the *next expected* number.
+    /// Requiring the next one rather than any number is what keeps "35 U.S.C. 112" and a
+    /// stray "2." in prose out of the claim list: a sequence has to be a sequence, and a
+    /// number out of turn is text. Requiring a space or the line's end after the dot is
+    /// the other half of it, and is what keeps "1.5 mL" from opening claim 1 — while
+    /// still admitting a bare `8.` alone on a line, which extraction produces often
+    /// enough, the number and its text having landed in different text runs.
+    ///
+    /// Stops at a text-less page, which is what a run of blank lines means here. Both
+    /// offices set the claims on their own sheets, and what follows them in the file is a
+    /// different document — a PCT search report, a drawing set — which would otherwise be
+    /// appended wholesale to the last claim, since nothing in it is numbered next.
+    private static func claims(in lines: [String]) -> [Claim] {
+        guard let first = lines.first else { return [] }
+
+        // The preamble is stripped rather than skipped, because a cover page sometimes
+        // sets claim 1 on the same line as it.
+        var body = Array(lines.dropFirst())
+        if let match = try? claimPreamble.prefixMatch(in: first) {
+            let remainder = String(first[match.range.upperBound...])
+            if !remainder.isEmpty { body.insert(remainder, at: 0) }
+        }
+
+        let lead = /^(\d{1,3})\.(?:\s+(.*))?$/
         var claims: [Claim] = []
         var expected = 1
         var current: (number: Int, text: String)?
+        var blanks = 0
 
-        for paragraph in paragraphs {
-            let text = paragraph.text
-            if let range = text.range(of: "\(expected). "),
-                text[text.startIndex ..< range.lowerBound]
-                    .allSatisfy({ !$0.isLetter && !$0.isNumber })
-            {
+        for line in body {
+            if line.isEmpty {
+                blanks += 1
+                if blanks >= 2, current != nil { break }
+                continue
+            }
+            blanks = 0
+
+            if let match = try? lead.wholeMatch(in: line), Int(match.1) == expected {
                 if let current { claims.append(claim(current)) }
-                current = (expected, String(text[range.upperBound...]))
+                current = (expected, match.2.map(String.init) ?? "")
                 expected += 1
                 continue
             }
-            if current != nil { current?.text += " " + text }
+            if current != nil { current?.text += " " + line }
         }
         if let current { claims.append(claim(current)) }
         return claims
@@ -324,24 +426,58 @@ enum PatentPDFImporter {
 
     // MARK: - Front matter
 
-    /// The patent number off the cover page, which USPTO sets as `US 10,123,456 B2`.
+    /// What a cover page calls the number, in the spellings the two offices use.
+    private static let numberLabels = [
+        "Patent Number", "Patent No", "Publication Number", "Publication No", "Pub. No",
+    ]
+
+    /// The patent number off the cover page, taken from the line that *labels* it.
+    ///
+    /// Anchoring on the label is the whole point. The obvious reading — the first thing
+    /// near the top of the page that looks like a serial — picks up the attorney docket
+    /// number: `Boston, MA 02210-2206` on an agent's address compacts to nine digits and
+    /// is otherwise indistinguishable from a grant number, and a patent filed under it is
+    /// unfindable. A docket is never labelled and the number always is: USPTO prints
+    /// `(10) Patent No.: US 10,123,456 B2` and WIPO prints `(10) International
+    /// Publication Number WO 2020/247738 A9`.
+    ///
+    /// Tokens are joined longest-run-first because the cover page sets the office code,
+    /// the serial and the kind code as three separate words. Reading them singly would
+    /// take `2020/247738` on its own and return a *US* patent, since a bare serial is
+    /// assumed to be US — right for a reader typing one and wrong for a WIPO cover page.
+    ///
+    /// Nothing labelled means `nil`, and the caller falls back to the filename. That is
+    /// the common case for a PCT publication, where the number is set in the header
+    /// artwork and never reaches the text layer at all.
     private static func number(in lines: [String]) -> PatentKey? {
         for line in lines.prefix(60) {
-            guard line.contains("US") || line.contains("Patent No") else { continue }
-            for token in line.split(whereSeparator: { $0 == " " || $0 == ":" }) {
-                if let key = PatentNumberParser.parse(String(token)), key.serial.count >= 7 {
-                    return key
+            guard let tail = labelledNumber(in: line) else { continue }
+            let tokens = tail.split(whereSeparator: { $0 == " " || $0 == ":" })
+            guard !tokens.isEmpty else { continue }
+
+            for width in stride(from: min(3, tokens.count), through: 1, by: -1) {
+                for start in 0 ... (tokens.count - width) {
+                    let joined = tokens[start ..< start + width].joined()
+                    if let key = PatentNumberParser.parse(joined), key.serial.count >= 7 {
+                        return key
+                    }
                 }
-            }
-            // `US 10,123,456 B2` is four tokens; try the whole line too.
-            if let key = PatentNumberParser.parse(line), key.serial.count >= 7 {
-                return key
             }
         }
         return nil
     }
 
-    /// The title, which on a USPTO cover page follows a line of `(54)`.
+    /// Whatever follows a number label on `line`, or `nil` if it carries none.
+    private static func labelledNumber(in line: String) -> Substring? {
+        for label in numberLabels {
+            guard let range = line.range(of: label, options: .caseInsensitive) else { continue }
+            // Drop the `.:` and the spaces between the label and the number.
+            return line[range.upperBound...].drop { !$0.isLetter && !$0.isNumber }
+        }
+        return nil
+    }
+
+    /// The title, which on a cover page follows a line of `(54)`.
     ///
     /// Best-effort and often wrong, which is why the caller passes a fallback: the
     /// filename is a poor title and a wrong one is worse.
@@ -349,7 +485,14 @@ enum PatentPDFImporter {
         guard let marker = lines.firstIndex(where: { $0.hasPrefix("(54)") }) else {
             return nil
         }
-        let head = lines[marker].dropFirst(4).trimmingCharacters(in: .whitespaces)
+        var head = lines[marker].dropFirst(4).trimmingCharacters(in: .whitespaces)
+        // WIPO sets the field as `(54) Title: METHODS OF...` where USPTO sets `(54)
+        // METHODS OF...`. "Title:" is the field's label and not part of the title, and
+        // left in it also defeats `capitalizedFirstLetterOnly` below — the mixed case
+        // makes a shouted title look deliberate.
+        if let label = head.range(of: "title:", options: [.caseInsensitive, .anchored]) {
+            head = head[label.upperBound...].trimmingCharacters(in: .whitespaces)
+        }
         let continued = lines[(marker + 1)...].prefix(2)
             .prefix { !$0.isEmpty && !$0.hasPrefix("(") }
         let title = ([head] + continued).joined(separator: " ")

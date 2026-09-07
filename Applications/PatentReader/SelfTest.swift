@@ -912,11 +912,13 @@ enum SelfTest {
 
     // MARK: - PDF
 
-    /// The PDF path's two refusals, which are the whole reason it is safe to offer.
+    /// The PDF path's refusals, and the two cover-page shapes it has to read.
     ///
-    /// Both are checked at the seam rather than through PDFKit, because what is being
-    /// asserted is the *decision* — refuse rather than import — and building a synthetic
-    /// two-column PDF with a text layer to assert it through would test PDFKit.
+    /// Driven through `PatentPDFImporter.patent(from:url:title:)` on synthetic lines
+    /// rather than through PDFKit, because what is worth asserting is the recovery —
+    /// which line opens a paragraph, where the claims start, which of the numbers on a
+    /// cover page is the document's — and building a PDF to assert it through would be
+    /// asserting PDFKit.
     private static func pdfParagraphRecovery(_ log: Log) {
         // Column order. Non-monotonic paragraph numbers mean the two columns were read
         // interleaved, and a document whose paragraphs are shuffled is worse than no
@@ -939,6 +941,167 @@ enum SelfTest {
         log.check(
             scan.errorDescription?.contains("Google Patents") ?? false,
             "the no-text-layer failure does not say what to do instead")
+
+        pdfPCTPublication(log)
+        pdfCoverPageNumber(log)
+        pdfMergedParagraphs(log)
+    }
+
+    /// A PCT publication, which is where four things went wrong at once.
+    ///
+    /// Every one of them is silent on its own, which is why this fixture is one document
+    /// rather than four: the marker width changes at paragraph 10 and again at 100, the
+    /// claims carry no marker of their own, the number is labelled rather than prefixed,
+    /// and an international search report is bound in after the claims. A recovery that
+    /// handles three of the four still produces a document that looks imported.
+    private static func pdfPCTPublication(_ log: Log) {
+        var lines = [
+            "(54) Title: METHODS OF PREPARING PROTEIN-OLIGONUCLEOTIDE COMPLEXES",
+            "(74) Agent: GE, Zhiyun; 600 Atlantic Avenue, Boston, MA 02210-2206 (US).",
+            "(10) International Publication Number: WO 2020/247738 A9",
+        ]
+        // WIPO writes the marker as `00` and the number, so one document prints [001],
+        // [0010] and [00100] and only the middle band is four digits wide.
+        for number in 1 ... 120 {
+            lines.append(
+                "[00\(number)] Paragraph \(number) of the specification, set out at "
+                    + "enough length to read as prose.")
+        }
+        lines += [
+            "CLAIMS",
+            "What is claimed is:",
+            "1. A method of isolating a complex, the method comprising contacting a",
+            "mixture with a hydrophobic resin.",
+            "2. The method of claim 1, wherein the resin is equilibrated first.",
+            // A bare number alone on a line: extraction puts the claim number and its
+            // text in different runs often enough that this is not a hypothetical.
+            "3.",
+            "The method of claim 2, wherein the elution solution is PBS.",
+            "",
+            "",
+            "INTERNATIONAL SEARCH REPORT",
+            "1. Claims Nos.: 5-28, because they are dependent claims.",
+        ]
+
+        guard
+            let patent = try? PatentPDFImporter.patent(
+                from: lines, url: URL(fileURLWithPath: "/tmp/WO2020247738A9.pdf"), title: nil)
+        else {
+            log.fail("a PCT publication does not import at all")
+            return
+        }
+
+        let paragraphs = patent.sections.first?.paragraphs ?? []
+        log.equal(paragraphs.count, 120, "the recovered paragraph count")
+        log.equal(paragraphs.first?.number, 1, "the first paragraph's printed number")
+        log.equal(paragraphs.last?.number, 120, "the last paragraph's printed number")
+        // The failure this replaces: with a fixed-width marker the last paragraph that
+        // matched swallows every later line, so it is the size of the document.
+        log.check(
+            paragraphs.allSatisfy { $0.text.count < 400 },
+            "a paragraph swallowed the ones after it")
+        log.check(
+            !paragraphs.contains { $0.text.contains("What is claimed is") },
+            "the claims were left inside the specification")
+
+        log.equal(patent.claims.count, 3, "the recovered claim count")
+        log.equal(
+            patent.claims.last?.text,
+            "The method of claim 2, wherein the elution solution is PBS.",
+            "a claim whose number stood alone on its line")
+        log.equal(patent.claims.last?.dependsOn, [2], "that claim's dependency")
+        // The search report is a different document bound into the same file, and the
+        // last claim is where it lands if nothing ends the claims.
+        log.check(
+            !patent.claims.contains { $0.text.contains("SEARCH REPORT") },
+            "the appended search report was read as claim text")
+
+        log.equal(
+            patent.key, PatentKey(country: "WO", serial: "2020247738", kind: "A9"),
+            "the number off a PCT cover page")
+        log.equal(
+            patent.title, "Methods of preparing protein-oligonucleotide complexes",
+            "the title off a PCT cover page")
+    }
+
+    /// Which number on a cover page is the document's.
+    ///
+    /// The one that has to be got right by refusing rather than by guessing: an agent's
+    /// address carries `Boston, MA 02210-2206`, which compacts to nine digits and is
+    /// shaped exactly like a grant number. Filed under it, the patent is unfindable.
+    private static func pdfCoverPageNumber(_ log: Log) {
+        let body = (1 ... 4).map {
+            "[000\($0)] Paragraph \($0), long enough to be read as a paragraph of prose."
+        }
+        func key(_ front: [String], file: String) -> PatentKey? {
+            try? PatentPDFImporter.patent(
+                from: front + body, url: URL(fileURLWithPath: "/tmp/\(file).pdf"), title: nil
+            ).key
+        }
+
+        log.equal(
+            key(["(10) Patent No.: US 10,123,456 B2"], file: "scan"),
+            PatentKey(country: "US", serial: "10123456", kind: "B2"),
+            "a US grant's labelled number")
+        log.equal(
+            key(["(10) Pub. No.: US 2014/0030575 A1"], file: "scan"),
+            PatentKey(country: "US", serial: "20140030575", kind: "A1"),
+            "a US pre-grant publication's labelled number")
+        // Nothing labelled — which is the common case for a PCT publication, whose
+        // number is set in the header artwork and never reaches the text layer — so the
+        // filename is all there is.
+        log.equal(
+            key(
+                ["(74) Agent: 600 Atlantic Avenue, Boston, MA 02210-2206 (US)."],
+                file: "WO2020247738A9"),
+            PatentKey(country: "WO", serial: "2020247738", kind: "A9"),
+            "an unlabelled cover page falls back to the filename")
+    }
+
+    /// The net beneath the marker regex.
+    ///
+    /// Paragraph breaks that stop being found do not fail: every later line is appended
+    /// to the last paragraph that did break, and the import succeeds, shows one
+    /// unreadable row, and cites that one paragraph for most of the document. This is the
+    /// check that turns it into a report.
+    private static func pdfMergedParagraphs(_ log: Log) {
+        let filler = Array(
+            repeating: String(repeating: "unmarked prose that nothing recognises. ", count: 20),
+            count: 40)
+
+        func refusal(_ lines: [String]) -> PatentPDFImporter.Failure? {
+            do {
+                _ = try PatentPDFImporter.patent(
+                    from: lines, url: URL(fileURLWithPath: "/tmp/US10123456B2.pdf"), title: nil)
+                return nil
+            } catch {
+                return error as? PatentPDFImporter.Failure
+            }
+        }
+
+        // Markers that stop partway, which is a PCT publication whose numbering ran past
+        // whatever width was matched.
+        let stopped = refusal(["[0001] One paragraph.", "[0002] Two.", "[0003] Three."] + filler)
+        log.equal(
+            stopped, .paragraphsMerged(number: 3, percent: 100),
+            "markers that stop partway")
+        log.check(
+            stopped?.errorDescription?.contains("Google Patents") ?? false,
+            "the merged-paragraph failure does not say what to do instead")
+
+        // No breaks found at all, which is an OCR'd grant: `[0001]` came out as `0001.`
+        // so there are no markers, and the extraction has no blank lines to fall back on
+        // either. One paragraph holding the whole document is the worst version of this
+        // and has to be caught by the same check.
+        log.equal(
+            refusal(filler), .paragraphsMerged(number: 1, percent: 100),
+            "an extraction with no paragraph breaks at all")
+
+        // ...but a short document that is genuinely one paragraph is not a failure, and
+        // the absolute floor is what keeps it from being reported as one.
+        log.equal(
+            refusal(["A single paragraph, well under the floor, and so not suspicious."]),
+            nil, "a short single-paragraph document")
     }
 
     // MARK: - Library
