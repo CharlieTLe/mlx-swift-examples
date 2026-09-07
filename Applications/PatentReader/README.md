@@ -98,11 +98,36 @@ where a single paragraph comes out holding **most of the document**, which means
 paragraph breaks stopped being found and everything after that point was merged into one
 row that every citation would then name.
 
-That third one is what a grant PDF off Google's own servers does: they are OCR, `[0001]`
-comes out as `0001.` with the brackets gone, and there is nothing left to break on. Those
-are exactly the documents to fetch by number instead. A PCT publication is the case the
-PDF path handles well — WIPO writes the marker as `00` and the number, so one document
-prints `[001]`, `[0010]` and `[00100]`, and the width is a range for that reason.
+Short of refusing, the paragraph breaks come from whichever of **three readings** the
+document supports, tried in order of how much each one claims:
+
+| Reading | What it trusts | When it is reached |
+| --- | --- | --- |
+| `[nnnn]` markers | the document's own numbering | a grant or publication that prints them |
+| blank lines | the extraction's own paragraph breaks | PDFKit gave any |
+| line lengths | a line that stops short of the measure ends its paragraph | neither of the above found a break |
+
+The third is the crude one and `Source.note` says when it was used. It is also what makes
+a **PCT application as filed** readable: no `[nnnn]` markers are printed in one, the
+applicant did not number the paragraphs and no office added them, and PDFKit returns its
+pages as one line per printed line with no blank line anywhere — so without it, three
+hundred paragraphs are a single row.
+
+Before any of that, the **page furniture** comes off: the running head, the page number,
+and the printed line numbers down the margin. None of the three is part of the document
+and all three land mid-sentence once the text is extracted — `5 5' untranslated region
+(5'UTR)` is a corrupted sentence that would be embedded, retrieved and quoted back with
+the margin number still in it, and `10 10. The composition of claim 8` is not recognised
+as claim 10, which loses every claim after it. A running head is identified by position
+and not only by recurrence, because body text recurs too: one grant repeats a claim
+limitation on half of its pages, and a rule that went by recurrence alone would delete it
+out of the claims.
+
+Where all of this leaves the two shapes on hand: a **PCT publication** comes out whole,
+markers and claims and all. A **grant PDF off Google's own servers** is OCR — `[0001]`
+comes out as `0001.` with the brackets gone — so its paragraphs are line-length guesses
+and its claims are only found when the OCR left the preamble intact. Those are exactly the
+documents to fetch by number instead.
 
 ### The markup is not uniform, and that shaped the model
 

@@ -914,7 +914,7 @@ enum SelfTest {
 
     /// The PDF path's refusals, and the two cover-page shapes it has to read.
     ///
-    /// Driven through `PatentPDFImporter.patent(from:url:title:)` on synthetic lines
+    /// Driven through `PatentPDFImporter.patent(fromPages:url:title:)` on synthetic lines
     /// rather than through PDFKit, because what is worth asserting is the recovery —
     /// which line opens a paragraph, where the claims start, which of the numbers on a
     /// cover page is the document's — and building a PDF to assert it through would be
@@ -943,8 +943,131 @@ enum SelfTest {
             "the no-text-layer failure does not say what to do instead")
 
         pdfPCTPublication(log)
+        pdfPCTApplicationAsFiled(log)
         pdfCoverPageNumber(log)
         pdfMergedParagraphs(log)
+    }
+
+    /// A PCT application as filed, which carries none of the structure the rest rely on.
+    ///
+    /// No `[nnnn]` markers are printed in one — the applicant did not number the
+    /// paragraphs and no office added them — and PDFKit hands its pages back as one line
+    /// per printed line with no blank line anywhere, so both readings that look for a
+    /// marker or a blank line find not a single break in three hundred paragraphs. What it
+    /// has instead is a numbered margin, and the page furniture that comes with it: a
+    /// running head and a page number on every page, and the margin numbers themselves,
+    /// one of which sits in front of a claim number and takes every later claim with it.
+    ///
+    /// Pages rather than lines, because that is what all three of those are defined
+    /// against.
+    private static func pdfPCTApplicationAsFiled(_ log: Log) {
+        let head = "WO 2024/153586 PCT /EP2024/050800"
+        let short = "and then it stops short of the margin."
+
+        /// One spec page: a head, a page number, and four paragraphs whose first line
+        /// carries the margin number and whose second stops short.
+        func page(_ folio: Int, from first: Int) -> [String] {
+            var lines = [head, "\(folio)"]
+            for index in 0 ..< 4 {
+                lines.append(
+                    "\((index + 1) * 5) Paragraph \(first + index) opens here and runs on "
+                        + "at the full measure of the page, as a justified line does,")
+                lines.append(short)
+            }
+            return lines
+        }
+
+        let pages: [[String]] = [
+            // The cover. Both field codes come out behind the glyph that extraction made
+            // of the rule down the side of the block, so neither opens its line.
+            [
+                "~ (54) Title: ANTISENSE MOLECULES AND THEIR USES",
+                "~ (57) Abstract: The invention relates to an oligonucleotide.",
+            ],
+            page(1, from: 1), page(2, from: 5), page(3, from: 9),
+            [
+                head, "4", "CLAIMS",
+                "5 1. An antisense oligonucleotide, wherein it comprises a sequence set out in",
+                "SEQ ID NO: 1 and one or more chemical modifications.",
+                "10 2. The oligonucleotide of claim 1, wherein the modification is a locked",
+                "nucleic acid modification.",
+                // The one that mattered: a margin number in front of the claim number.
+                // Unstripped, `10 3.` is not claim 3, and claims 3 onwards are lost.
+                "15 3. The oligonucleotide of claim 2, wherein all nucleotides are modified.",
+            ],
+            // A drawing sheet, which is what follows the claims and has to not become the
+            // text of the last one.
+            [head, "1.0", "Cl) <(", "e>z in=", ".c >", "I *"],
+        ]
+
+        func imported(_ file: String) -> Patent? {
+            try? PatentPDFImporter.patent(
+                fromPages: pages, url: URL(fileURLWithPath: "/tmp/\(file).pdf"), title: nil)
+        }
+
+        guard let patent = imported("WO2024153586A1-pp") else {
+            log.fail("a PCT application as filed does not import at all")
+            return
+        }
+
+        let paragraphs = patent.sections.first?.paragraphs ?? []
+        let body = paragraphs.filter { $0.text.hasPrefix("Paragraph ") }
+        log.equal(patent.numbering, .synthesized, "the numbering of a document with no markers")
+        log.equal(body.count, 12, "body paragraphs recovered from line lengths")
+        // Worth pinning rather than filtering out: the cover page's own text is paragraphs
+        // too. It is bibliographic data with no paragraph structure in it at all, and
+        // showing it as rows is truer than dropping it on a guess about what prose looks
+        // like.
+        log.equal(
+            paragraphs.count, body.count + 2,
+            "the cover page's two field lines are paragraphs of their own")
+        log.check(
+            !paragraphs.contains { $0.text.contains("5 Paragraph") },
+            "a margin number survived into the text of a paragraph")
+        log.check(
+            body.allSatisfy { $0.text.hasSuffix(short) },
+            "a paragraph did not end where its line stopped short")
+        // The same last line on every page, which is what pins the running-head rule to
+        // position rather than to recurrence: a line repeated three times in the body is
+        // not furniture, and a threshold that went by recurrence alone would delete it.
+        log.check(
+            body.count == 12 && body.allSatisfy { $0.text.contains(short) },
+            "a body line repeated on every page was taken for a running head")
+        log.check(
+            !paragraphs.contains { $0.text.contains(head) },
+            "the running head survived into the text of a paragraph")
+        // The page number does two kinds of damage at once, and both are visible here: it
+        // lands mid-sentence in the paragraph that spans the break, and — being two
+        // characters — it breaks that paragraph in half as well.
+        log.check(
+            !paragraphs.contains { $0.text.contains("margin. 2") },
+            "the page number survived into the text of a paragraph")
+        log.check(
+            patent.source.note?.contains("stop short of the full measure") ?? false,
+            "the note does not admit that the paragraph breaks were inferred")
+
+        log.equal(patent.claims.count, 3, "claims recovered past a margin-numbered page")
+        log.equal(
+            patent.claims.last?.text,
+            "The oligonucleotide of claim 2, wherein all nucleotides are modified.",
+            "the claim whose number a margin number preceded")
+        log.check(
+            !patent.claims.contains { $0.text.contains("Cl)") },
+            "the drawing sheet after the claims was read as claim text")
+
+        log.equal(
+            patent.title, "Antisense molecules and their uses",
+            "a title behind the glyph extraction made of the rule")
+        // `-pp` is not a kind code, and the name is tried again without it.
+        log.equal(
+            patent.key, PatentKey(country: "WO", serial: "2024153586", kind: "A1"),
+            "the number off a filename with a suffix on it")
+        // A filename that names no office is a weaker claim about the office than the
+        // document's own running head, which says WO on every page.
+        log.equal(
+            imported("2024153586")?.key,
+            PatentKey(country: "WO", serial: "2024153586", kind: nil),
+            "the number off the running head")
     }
 
     /// A PCT publication, which is where four things went wrong at once.
@@ -985,7 +1108,8 @@ enum SelfTest {
 
         guard
             let patent = try? PatentPDFImporter.patent(
-                from: lines, url: URL(fileURLWithPath: "/tmp/WO2020247738A9.pdf"), title: nil)
+                fromPages: [lines], url: URL(fileURLWithPath: "/tmp/WO2020247738A9.pdf"), title: nil
+            )
         else {
             log.fail("a PCT publication does not import at all")
             return
@@ -1035,7 +1159,7 @@ enum SelfTest {
         }
         func key(_ front: [String], file: String) -> PatentKey? {
             try? PatentPDFImporter.patent(
-                from: front + body, url: URL(fileURLWithPath: "/tmp/\(file).pdf"), title: nil
+                fromPages: [front + body], url: URL(fileURLWithPath: "/tmp/\(file).pdf"), title: nil
             ).key
         }
 
@@ -1072,7 +1196,8 @@ enum SelfTest {
         func refusal(_ lines: [String]) -> PatentPDFImporter.Failure? {
             do {
                 _ = try PatentPDFImporter.patent(
-                    from: lines, url: URL(fileURLWithPath: "/tmp/US10123456B2.pdf"), title: nil)
+                    fromPages: [lines], url: URL(fileURLWithPath: "/tmp/US10123456B2.pdf"),
+                    title: nil)
                 return nil
             } catch {
                 return error as? PatentPDFImporter.Failure
