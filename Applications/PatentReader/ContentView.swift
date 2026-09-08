@@ -115,7 +115,7 @@ struct ContentView: View {
     /// `AnswerPaneView.focusRequest` for why it is a counter.
     @State private var askFieldFocusRequest = 0
 
-    /// Bumped to raise the reader's find bar. ⌘F is handled inside `DocumentReaderView`,
+    /// Bumped to raise the reader's find bar. ⌘F is handled inside whichever reader is up,
     /// where the find state lives; this is for the affordances that are not a key — the
     /// header button here, and the overflow row on a phone.
     @State private var findRequest = 0
@@ -376,10 +376,8 @@ struct ContentView: View {
                     case .original:
                         PatentPDFReaderView(
                             patent: patent, pdf: library.pdf, plan: highlightPlan,
-                            onFindInText: {
-                                aimAtText()
-                                findRequest += 1
-                            })
+                            findRequest: findRequest,
+                            onCancel: { cancel() })
                     }
                 }
             } else {
@@ -545,7 +543,6 @@ struct ContentView: View {
                 }
                 // Neither is ⌘F, and this is the only way to a find field on a phone.
                 Button("Find in this patent", systemImage: "text.magnifyingglass") {
-                    aimAtText()
                     findRequest += 1
                 }
                 Button("Copy passage", systemImage: "doc.on.doc") { copySelection() }
@@ -572,15 +569,14 @@ struct ContentView: View {
     #endif
 
     /// ⌘F, as a control — because a shortcut nobody is told about is a feature half the
-    /// readers do not have. The bar itself, and the key, belong to `DocumentReaderView`.
+    /// readers do not have. The bar itself, and the key, belong to whichever reader is up.
     ///
     /// Disabled with no patent open, where there is nothing to search and no reader view to
-    /// receive the request. Switches to the reader text first, for the same reason ⌘F does
-    /// on the PDF tab: the words this searches are the parsed text's.
+    /// receive the request. Both readers now answer this: the request goes to the one in the
+    /// hierarchy, and each searches the document it is showing.
     @ViewBuilder
     private var findButton: some View {
         Button {
-            aimAtText()
             findRequest += 1
         } label: {
             Image(systemName: "text.magnifyingglass")

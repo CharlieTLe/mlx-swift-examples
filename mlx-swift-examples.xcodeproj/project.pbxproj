@@ -19,14 +19,14 @@
 		97455527304E2B6F00EDCDED /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B05 /* MLX */; };
 		97455528304E2B6F00EDCDED /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B06 /* HuggingFace */; };
 		97455529304E2B6F00EDCDED /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1AF0000000000000B07 /* Tokenizers */; };
-		9745607D305096E600EDCDED /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B01 /* MLXLLM */; };
-		9745607E305096E600EDCDED /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B02 /* MLXVLM */; };
-		9745607F305096E600EDCDED /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B03 /* MLXLMCommon */; };
-		97456080305096E600EDCDED /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B04 /* MLXHuggingFace */; };
-		97456081305096E600EDCDED /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B05 /* MLX */; };
-		97456082305096E600EDCDED /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B06 /* MLXEmbedders */; };
-		97456083305096E600EDCDED /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B07 /* HuggingFace */; };
-		97456084305096E600EDCDED /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B08 /* Tokenizers */; };
+		9745627B3050982C00EDCDED /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B01 /* MLXLLM */; };
+		9745627C3050982C00EDCDED /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B02 /* MLXVLM */; };
+		9745627D3050982C00EDCDED /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B03 /* MLXLMCommon */; };
+		9745627E3050982C00EDCDED /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B04 /* MLXHuggingFace */; };
+		9745627F3050982C00EDCDED /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B05 /* MLX */; };
+		974562803050982C00EDCDED /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B06 /* MLXEmbedders */; };
+		974562813050982C00EDCDED /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B07 /* HuggingFace */; };
+		974562823050982C00EDCDED /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = E5B2D1B00000000000000B08 /* Tokenizers */; };
 		C3132C2E2DFB317C00270E8E /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = C3132C2D2DFB317C00270E8E /* MLXVLM */; };
 		C3132C302DFB317C00270E8E /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = C3132C2F2DFB317C00270E8E /* MLXLLM */; };
 		C3208E762DB1945D006AE6CA /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = C3208E752DB1945D006AE6CA /* MLX */; };
@@ -279,6 +279,7 @@
 				PatentReader/Reader/LibraryView.swift,
 				PatentReader/Reader/PassagePlacement.swift,
 				PatentReader/Reader/PassageSelection.swift,
+				PatentReader/Reader/PatentPDFFind.swift,
 				PatentReader/Reader/PatentPDFMap.swift,
 				PatentReader/Reader/PatentPDFMarks.swift,
 				PatentReader/Reader/PatentPDFReaderView.swift,

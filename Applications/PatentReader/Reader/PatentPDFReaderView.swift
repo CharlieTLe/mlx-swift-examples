@@ -13,27 +13,22 @@ import SwiftUI
 ///
 /// **What the reader's keys do here, and why each one was decided rather than inherited.**
 ///
-/// - **⌘F** switches to the reader text and raises the find bar. `PDFView` ships no find
-///   UI on either platform — Preview's find bar is Preview's own code over
-///   `PDFDocument.findString(_:withOptions:)` — so a ⌘F left unbound would be a working
-///   shortcut that silently stops working on one tab. Sending it to the text is honest
-///   about which of the two views the app can actually search.
-/// - **⌘G, ⇧⌘G** are absent, because there is nothing here to step through.
-/// - **⇧⌘C** is absent. `Citation.quotation` needs `[DocumentRow]`, and a `PDFSelection`
-///   cannot be mapped back to a paragraph index: the PDF is paginated by the office's
-///   typesetting and carries no index this app can resolve one against.
-/// - **⌘C** is PDFKit's own, and copies the selected text **uncited**. That is stated here
-///   because it is a real difference from the text tab, where ⌘C appends the citation: no
-///   truthful citation can be attached to a span this app cannot locate in the document it
-///   parsed, and attaching an approximate one would be exactly the failure the citation
-///   verdicts exist to prevent.
+/// - **⌘F, ⌘G, ⇧⌘G** are the find bar, over `PDFDocument.findString`. `PDFView` ships no
+///   find UI on either platform — Preview's find bar is Preview's own code over the same
+///   call — so this app builds one, out of the same `FindBar` the text reader used, byte for
+///   byte. See `PatentPDFFind` for why finding does not select.
+/// - **⇧⌘C** is not here yet. `Citation.quotation` still needs `[DocumentRow]`; resolving a
+///   `PDFSelection` back to the passages it spans is the next thing to move.
+/// - **⌘C** is PDFKit's own, and copies the selected text uncited.
 /// - **Arrows, space, page up and down** are PDFKit's scrolling, which is why there is no
 ///   `.focusable()` on the host below: `PDFView`'s document view takes first responder
 ///   itself, and a SwiftUI focus item over it would compete for the keys.
-/// - **Esc** does nothing, deliberately. Esc means "put that away" in a ladder — the find
-///   bar, then the selection, then `onCancel` — and a tab is not a thing you put away.
+/// - **Esc** is a ladder — the find bar, then (shortly) the selection, then `onCancel` —
+///   through a `.keyboardShortcut(.escape)` button rather than `.onExitCommand`, for the
+///   first-responder reason just above.
 ///
-/// A citation click always lands in the *text*: see `ContentView.aimAtText()`.
+/// A citation chip lands here as well as in the text: see `PatentPDFMap`, which is what
+/// resolves `[0042]` against a document that carries no paragraph index of its own.
 @MainActor
 struct PatentPDFReaderView: View {
     let patent: Patent
@@ -41,20 +36,37 @@ struct PatentPDFReaderView: View {
     /// What the answer found, what it cited, and where the reader was last sent. Built by
     /// `ContentView`, which is the only place that has all three.
     let plan: HighlightPlan
-    /// ⌘F and the two find affordances: switch to the reader text, then raise the bar.
-    let onFindInText: () -> Void
+
+    /// Bumped to raise the find bar and put the keyboard in it. A counter for
+    /// `AnswerPaneView.focusRequest`'s reason — the request is an event, and a `Bool` would
+    /// be a state that has to be written back to false before it can fire again.
+    ///
+    /// ⌘F is handled here rather than by the caller, because the state it acts on is here.
+    /// This exists for the affordances that are not a key: the macOS header button, and the
+    /// iOS overflow row, where there is no ⌘F to press.
+    let findRequest: Int
+
+    /// Esc's last rung. See `escape()`.
+    let onCancel: () -> Void
 
     /// The open document, and the anchor map over it.
     ///
     /// **Owned here rather than inside `PatentPDFView`**, which is where `PDFDocument(url:)`
     /// used to be called, and the move is what makes everything above the representable
-    /// possible. The map, the marks and — shortly — the find bar and the selection all have
-    /// to address the *same* `PDFDocument` instance: annotations are added to its
-    /// `PDFPage`s, and a second document opened from the same URL would be a different set
-    /// of pages with the marks on the wrong one. So one object, made once, handed down.
+    /// possible. The map, the marks, the find bar and the selection all have to address the
+    /// *same* `PDFDocument` instance: annotations are added to its `PDFPage`s, and a second
+    /// document opened from the same URL would be a different set of pages with the marks on
+    /// the wrong one. So one object, made once, handed down.
     @State private var document: PDFDocument?
     @State private var map: PatentPDFMap?
     @State private var marks = PatentPDFMarks()
+
+    /// Find in this patent. See `PatentPDFFind` for why finding deliberately does not select.
+    @State private var find = PatentPDFFind()
+    /// Whether the find bar is up. Separate from `find` so that type stays a description of
+    /// matching rather than a view's presentation state.
+    @State private var isFinding = false
+    @FocusState private var isFindFocused: Bool
 
     /// What to say when a citation could not be landed on. See `band`.
     @State private var band: String?
@@ -65,12 +77,24 @@ struct PatentPDFReaderView: View {
             case .onDisk(let file):
                 if let document, let map, opened(document, is: file) {
                     VStack(spacing: 0) {
+                        if isFinding {
+                            FindBar(
+                                text: query(document),
+                                summary: find.summary,
+                                hasMatches: !find.matches.isEmpty,
+                                isFocused: $isFindFocused,
+                                onNext: { find.advance(by: 1) },
+                                onPrevious: { find.advance(by: -1) },
+                                onClose: { stopFinding() })
+                            Divider()
+                        }
                         if let band {
                             reportBand(band)
                             Divider()
                         }
                         PatentPDFView(
                             document: document, map: map, marks: marks, plan: plan,
+                            find: find,
                             isMapped: map.isBuilt,
                             numbering: patent.numbering,
                             page: Binding(
@@ -120,7 +144,86 @@ struct PatentPDFReaderView: View {
         // switching back and forth this invites costs nothing.
         .task(id: patent.key) { await open() }
         .task(id: bandRequest) { await raiseBand() }
-        .background { findShortcut }
+        .onChange(of: findRequest) { startFinding() }
+        .background { shortcuts }
+    }
+
+    // MARK: - Finding
+
+    /// The find field's text, which runs the search on every keystroke — an incremental
+    /// find, the way every find field since the first one has worked.
+    ///
+    /// The anchor is the **current match** when there is one and the page the reader is on
+    /// otherwise. That is what makes refining a query behave: typing `subs` after `sub`
+    /// keeps the reader where `sub` put them instead of throwing them back up the document,
+    /// while a query typed fresh starts from what they are reading.
+    private func query(_ document: PDFDocument) -> Binding<String> {
+        Binding(
+            get: { find.query },
+            set: { typed in
+                let anchor =
+                    find.current?.pages.first.map { document.index(for: $0) }
+                    ?? pdf.pages[patent.key]
+                find.search(typed, in: document, near: anchor)
+            })
+    }
+
+    private func startFinding() {
+        isFinding = true
+        // Focused **next** main-actor turn, deliberately, and this is not a nicety: the
+        // field does not exist until the bar is in the hierarchy, and a `@FocusState` write
+        // naming a view SwiftUI has not created yet is dropped silently. ⌘F would raise the
+        // bar and leave the keyboard in the document.
+        //
+        // Also correct when the bar is already up, which is the case this exists for: ⌘F
+        // while reading a hit means "let me type another term", so the keyboard comes back.
+        Task { isFindFocused = true }
+    }
+
+    private func stopFinding() {
+        isFinding = false
+        isFindFocused = false
+        find.clear()
+    }
+
+    /// Esc, and the ladder it means.
+    ///
+    /// Esc means "put that away", innermost first: the find bar, then the reader's own
+    /// selection, then whatever the app is doing. Each rung returns, so one press puts away
+    /// one thing.
+    ///
+    /// Through a `.keyboardShortcut(.escape)` button and **not** `.onExitCommand`, which is
+    /// what the text reader used. `PDFView`'s own document view takes first responder — that
+    /// is how the arrows, space and page keys scroll without this app writing any of them —
+    /// so there is no SwiftUI focus item here for an exit command to be delivered to.
+    private func escape() {
+        if isFinding {
+            stopFinding()
+            return
+        }
+        onCancel()
+    }
+
+    /// ⌘F, ⌘G, ⇧⌘G and Esc. Keyboard shortcuts need a control to hang off; zero-opacity
+    /// rather than `.hidden()`, which removes it from the hierarchy along with its shortcut.
+    ///
+    /// **⌘F is the document's, and the library's filter is on ⌥⌘F to give it up.** Of the two
+    /// fields this is the one ⌘F means everywhere else: find in the thing I am reading.
+    @ViewBuilder
+    private var shortcuts: some View {
+        Group {
+            Button("Find in this patent") { startFinding() }
+                .keyboardShortcut("f", modifiers: .command)
+            Button("Find next") { find.advance(by: 1) }
+                .keyboardShortcut("g", modifiers: .command)
+            Button("Find previous") { find.advance(by: -1) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+            Button("Cancel") { escape() }
+                .keyboardShortcut(.escape, modifiers: [])
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     /// Fetch if needed, open, and anchor.
@@ -140,6 +243,8 @@ struct PatentPDFReaderView: View {
         guard let document else { return }
         let map = pdf.map(for: patent)
         self.map = map
+        // The query survives the switch and the matches cannot — see `PatentPDFFind.refind`.
+        find.refind(in: document)
         await map.build(in: document)
     }
 
@@ -250,21 +355,6 @@ struct PatentPDFReaderView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    /// ⌘F on this tab. Zero-opacity rather than `.hidden()`, which would take the shortcut
-    /// out of the hierarchy with the button — the idiom `DocumentReaderView.findShortcuts`
-    /// and `ContentView.shortcuts` both use.
-    ///
-    /// There is never a second ⌘F: `ContentView` puts one reader or the other in the
-    /// hierarchy with a `switch`, so `DocumentReaderView`'s shortcuts leave with it.
-    @ViewBuilder
-    private var findShortcut: some View {
-        Button("Find in this patent") { onFindInText() }
-            .keyboardShortcut("f", modifiers: .command)
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
-    }
 }
 
 /// `PDFKit.PDFView`, as a SwiftUI view.
@@ -288,6 +378,7 @@ struct PatentPDFView {
     let map: PatentPDFMap
     let marks: PatentPDFMarks
     let plan: HighlightPlan
+    let find: PatentPDFFind
     /// Whether `map` has finished. A stored property and not a read of `map.isBuilt` inside
     /// `update`, because `updateNSView` is not an observation scope: the parent reads it,
     /// which is what re-runs this view when the walk finishes and the marks become drawable.
@@ -312,6 +403,10 @@ struct PatentPDFView {
         /// The last jump acted on. Identity and not the target, because clicking the same
         /// chip twice has to move twice — the reason `PassageFocus` carries a `UUID` at all.
         var lastFocus: UUID?
+
+        /// The last find step scrolled to, for the same reason in miniature: two hits in one
+        /// place would be "no change" and the second ⌘G would silently not scroll.
+        var lastFindStep = 0
 
         /// `nonisolated(unsafe)` so that `deinit`, which is not main-actor isolated, can
         /// hand the token back. It is written once on the main actor while the view is
@@ -366,6 +461,7 @@ struct PatentPDFView {
             // A reload is a new set of pages, so a jump made against the old ones has to be
             // made again.
             coordinator.lastFocus = nil
+            coordinator.lastFindStep = 0
         }
         // The remembered page is reconciled **before** the jump, deliberately. A jump moves
         // the view and `.PDFViewPageChanged` catches `page` up a turn later, so reconciling
@@ -373,6 +469,14 @@ struct PatentPDFView {
         // was — a chip that appears to work and then undoes itself.
         if let current = view.currentPage, document.index(for: current) != page {
             go(to: page, in: view)
+        }
+        // **A separate channel from the marks and from the selection**, which is the whole
+        // reason closing the find bar cannot disturb an answer's evidence and a find hit
+        // cannot scope the reader's next question. See `PatentPDFFind`.
+        view.highlightedSelections = find.matches.isEmpty ? nil : find.highlighted
+        if coordinator.lastFindStep != find.step {
+            coordinator.lastFindStep = find.step
+            if let hit = find.current { view.go(to: hit) }
         }
         guard isMapped else { return }
         marks.apply(plan, from: map, numbering: numbering, to: document, redrawing: view)
