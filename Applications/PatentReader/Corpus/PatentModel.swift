@@ -333,7 +333,9 @@ enum Citation {
     static func string(_ target: CitationTarget, numbering: Numbering) -> String {
         switch target {
         case .paragraph(let key):
-            "\(key.patent.display) · \(paragraphLabel(key.number, numbering: numbering))"
+            "\(key.patent.display) · "
+                + paragraphLabel(
+                    key.number, numbering: numbering, country: key.patent.country)
         case .claim(let key):
             "\(key.patent.display) · claim \(key.number)"
         }
@@ -350,20 +352,44 @@ enum Citation {
         switch target {
         case .paragraph(let key):
             numbering == .printed
-                ? "[\(padded(key.number))]" : "¶\(key.number)"
+                ? "[\(padded(key.number, country: key.patent.country))]" : "¶\(key.number)"
         case .claim(let key):
             "claim \(key.number)"
         }
     }
 
-    private static func paragraphLabel(_ number: Int, numbering: Numbering) -> String {
+    private static func paragraphLabel(
+        _ number: Int, numbering: Numbering, country: String
+    ) -> String {
         numbering == .printed
-            ? "[\(padded(number))]" : "¶\(number) (numbered by this reader)"
+            ? "[\(padded(number, country: country))]"
+            : "¶\(number) (numbered by this reader)"
     }
 
-    /// Four digits, as every patent office prints them: `[0042]`, not `[42]`.
-    private static func padded(_ number: Int) -> String {
-        String(format: "%04d", number)
+    /// The marker as the office that published this document prints it.
+    ///
+    /// **Not one convention, and the difference is not cosmetic.** USPTO zero-pads to four,
+    /// so paragraph 42 is `[0042]` and paragraph 100 is `[0100]`. WIPO writes `00` and then
+    /// the number, so 1 is `[001]`, 10 is `[0010]` and 100 is `[00100]`.
+    /// `PatentPDFImporter` states this at the top of the file and its marker regex accepts
+    /// three to five digits *because* of it — and then this function padded every office's
+    /// numbers to four regardless.
+    ///
+    /// On WO 2020247738 A9 that made 347 of 437 paragraph citations name a marker the
+    /// publication does not contain: the app cited `[0309]` for a paragraph the office
+    /// prints as `[00309]`. The 90 that were right are paragraphs 10 to 99, which is
+    /// exactly the band where the two conventions agree — so the defect was invisible in
+    /// any sample small enough to read, while being wrong about four fifths of the
+    /// document. This is the failure `Citation.string`'s own note says the app must never
+    /// cause: a number a reader copies into a brief and then cannot find in the grant.
+    ///
+    /// The country is the discriminator because the convention belongs to the office, and
+    /// `PatentKey` already carries it — the same reasoning that makes `display` group US
+    /// serials in threes and leave every other office's alone. Nothing is stored and no
+    /// library is reindexed to know this. A third office that pads differently is a case
+    /// here, not a redesign.
+    private static func padded(_ number: Int, country: String) -> String {
+        country == "WO" ? "00\(number)" : String(format: "%04d", number)
     }
 
     /// The cited text with the citation appended, which is what makes a passage pasted

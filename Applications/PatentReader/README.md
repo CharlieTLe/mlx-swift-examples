@@ -216,6 +216,18 @@ the patent office's authority and a pilcrow does not, so the two never look alik
 chip size — because a reader who copies `[0042]` into a brief and then opens the printed
 grant will not find it, and that would be a wrong citation this app caused.
 
+**And a bracketed number has to be the office's own, down to its width.** USPTO zero-pads
+to four, so paragraph 100 is `[0100]`. WIPO writes `00` and then the number, so its
+sequence runs `[001]`, `[0010]`, `[00100]` — which `PatentPDFImporter` has said at the top
+of the file all along, and is why its marker regex accepts three to five digits. `Citation`
+padded every office to four anyway, so on WO 2020247738 A9 the app cited `[0309]` for a
+paragraph the publication prints as `[00309]`: 347 of 437 paragraph citations naming a
+marker that document does not contain. The 90 that were right are paragraphs 10 to 99, the
+band where the two conventions agree, which is why nothing caught it — the defect reads as
+correct on every sample small enough to check by eye. It was the failure in the paragraph
+above, arriving through the door marked *printed* rather than the one the `¶` guards.
+`--selftest` now pins both offices, including that 10-to-99 trap.
+
 ### Retrieval, and why there are two legs
 
 `PassageContext.swift` in the sibling reader opens: *"No embeddings: the act / scene /

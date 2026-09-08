@@ -500,6 +500,33 @@ enum SelfTest {
                 != Citation.chipLabel(paragraph, numbering: .synthesized),
             "the two numbering states must not render alike even at chip size")
 
+        // WIPO does not pad the way USPTO does, and a marker this app prints in the wrong
+        // width is a citation a reader cannot find in the publication — the very failure
+        // the synthesized `¶` exists to prevent, arriving through the door marked printed.
+        // `[001]`, `[0010]`, `[00100]` is WIPO's own sequence, quoted in
+        // `PatentPDFImporter`'s header, which is why its marker regex takes three to five
+        // digits. The 10-to-99 pair is the trap: it is the band where the two conventions
+        // agree, so a four-digit assumption reads as correct on any small sample and is
+        // wrong about four fifths of a real document.
+        let wipo = PatentKey(country: "WO", serial: "2020247738", kind: "A9")
+        func wipoChip(_ number: Int) -> String {
+            Citation.chipLabel(
+                .paragraph(ParagraphKey(patent: wipo, number: number)), numbering: .printed)
+        }
+        log.equal(wipoChip(1), "[001]", "WIPO pads a single digit to three")
+        log.equal(wipoChip(10), "[0010]", "WIPO and USPTO agree in the tens")
+        log.equal(wipoChip(99), "[0099]", "and through the nineties")
+        log.equal(wipoChip(113), "[00113]", "and then WIPO grows where USPTO does not")
+        log.equal(wipoChip(309), "[00309]", "as WO 2020247738 A9 prints [00309]")
+        log.equal(
+            Citation.string(
+                .paragraph(ParagraphKey(patent: wipo, number: 309)), numbering: .printed),
+            "WO 2020247738 A9 · [00309]", "the long form carries the office's own width")
+        log.check(
+            wipoChip(309) != Citation.chipLabel(
+                .paragraph(ParagraphKey(patent: key, number: 309)), numbering: .printed),
+            "the two offices must not render a paragraph number alike")
+
         // The URL a chip carries has to survive the round trip, or clicking it does
         // nothing and there is no error anywhere.
         for target in [paragraph, claim] {
