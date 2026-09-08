@@ -85,6 +85,15 @@ a brief does. Every citation is checked, and there are **three** answers rather 
   plain text, **not a link**. The number is real, so striking it through would be the app
   calling the model a liar about something true; but the model did not read that
   paragraph, so the *connection* is invented, and making it clickable would launder that.
+
+  "Shown" has to mean *everything* the prompt carried, and for a while it did not: the
+  retrieved set was built from the retrieved passages alone, while `Prompts` also renders
+  an **INDEPENDENT CLAIMS** block that `AnswerContext.Entry` assembles on purpose, so that
+  a question about scope is answered against what is claimed. A model that read claim 1
+  there and cited it was told it had never been shown claim 1, and lost the chip. It hit
+  precisely the question the block was added for — ask what a patent covers and every
+  citation in the answer came back dead — which is why `retrieved` now unions the
+  independent claims in.
 - **Nonexistent** — no such paragraph or claim. Struck through, still legible.
 
 It **reports and never strips**, which is `QuoteCheck`'s doctrine carried over: a bad
@@ -341,6 +350,18 @@ Four findings decided the design, each of which had a plausible wrong answer:
   must never be used — a claim's elements are separated in the printed document by a hanging
   indent. Claim 1 of the canonical fixture is three words long (`A method comprising:`), so
   the four-word rule is a maximum rather than a minimum: the number is doing the work.
+- **And that number must not match inside a longer one.** `findString` has no notion of a
+  word boundary, so claim 8's needle `8. The method of claim` matches happily inside
+  `108. The method of claim`. On a 120-claim PCT publication that is not a curiosity: claim
+  8's own number is set at the end of a line, so the primary needle does not match at claim
+  8 at all, the sole candidate is claim 108 forty pages downstream, and the cursor follows
+  it there. `monotonic` only ever moves forward, so claims 9-120 were then all *behind* the
+  cursor — **13 placed of 120**. Rejecting a candidate whose preceding character is a digit
+  restores 113. Two things about that failure are worth keeping: the substring match also
+  suppressed the fallback that exists for exactly the line-broken-number case, since a
+  fallback only fires when the primary finds nothing at all; and the "getting stuck" rule
+  below guards a stray match *before* the cursor while this was a stray match *after* it,
+  which is the direction that cascades.
 - **`.highlight` annotations render translucently** here, verified by rendering a page with
   and without one and counting surviving dark pixels (0.188 → 0.201). No opaque-box
   workaround was needed. The subtype choice is behind one function so `.underline` is a
@@ -497,6 +518,13 @@ because a measured baseline is worth more than an unmeasured improvement:
 - **Eight citations of thirty-eight were `unretrieved`.** Real paragraphs the model was
   not shown. That is the verdict doing its job — none of them is clickable — and it is
   also a signal that the model reaches past its passages more than the prompt asks it to.
+
+  That count was taken before `retrieved` included the independent claims, so an unknown
+  share of those eight were citations to claims the prompt did in fact carry, and the
+  number is an upper bound rather than a measurement. It is left as it was recorded, with
+  this note, because the run is a dated baseline and quietly restating it against a
+  different build is how a baseline stops meaning anything. The next `--benchmark` is what
+  replaces it.
 
 Zero citations were invented across the run, which is the failure the check was most
 expected to catch.

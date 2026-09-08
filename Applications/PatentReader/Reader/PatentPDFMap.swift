@@ -203,13 +203,32 @@ final class PatentPDFMap {
     private func search(_ needle: String, in document: PDFDocument)
         -> [(candidate: Candidate, selection: PDFSelection)]
     {
-        document.findString(needle, withOptions: [.caseInsensitive, .diacriticInsensitive])
+        // A needle that opens with a claim's printed number must not be allowed to match
+        // *inside* a longer number, and `findString` knows nothing of word boundaries.
+        // `8. The method of claim` occurs in `108. The method of claim` — so on a document
+        // with a hundred-odd claims, claim 8's needle finds claim 108 and nothing else,
+        // because claim 8's own number is set at the end of a line and the primary needle
+        // never matches there at all. Measured on WO 2020247738 A9: this one collision
+        // placed claim 8 forty pages downstream, and since `monotonic` only ever moves the
+        // cursor *forward*, it stranded claims 9-120 behind it — 13 placed of 120, against
+        // 113 with the guard. The forward jump is the damage; the substring match is the
+        // cause, and it is also what suppressed the fallback that exists for exactly the
+        // line-broken-number case, since a fallback only fires when the primary finds
+        // nothing.
+        let guarded = needle.first?.isNumber ?? false
+        return document
+            .findString(needle, withOptions: [.caseInsensitive, .diacriticInsensitive])
             .compactMap { selection in
                 guard let page = selection.pages.first else { return nil }
                 let index = document.index(for: page)
                 guard index != NSNotFound else { return nil }
                 let range = selection.range(at: 0, on: page)
                 guard range.location != NSNotFound else { return nil }
+                if guarded, range.location > 0, let text = page.string as NSString? {
+                    let before = text.substring(
+                        with: NSRange(location: range.location - 1, length: 1))
+                    if before.rangeOfCharacter(from: .decimalDigits) != nil { return nil }
+                }
                 return (Candidate(page: index, offset: range.location), selection)
             }
     }

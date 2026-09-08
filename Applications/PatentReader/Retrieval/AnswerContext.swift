@@ -108,11 +108,28 @@ struct AnswerContext: Sendable {
                 text: chunk.chunk.text)
         }
 
+        // The independent claims belong in here as much as the passages do, and leaving
+        // them out was this type contradicting the comment on its own field. `retrieved` is
+        // "every target the model was shown", `Prompts` renders an INDEPENDENT CLAIMS block
+        // carrying each one's `fullText`, and `Entry.independentClaims` exists precisely so
+        // that a question about scope is answered against what is claimed rather than only
+        // against what was retrieved. A model that then cites `claim 1` is citing something
+        // it read, in the block this app chose to hand it — so verdicting that `.unretrieved`
+        // told the reader "the model was never shown this" about a passage the app put in
+        // front of it, and took the chip away. The failure lands hardest on exactly the
+        // question the claims block was added for: ask what a patent covers and every
+        // citation in the answer is a dead one.
+        let shownClaims = entries.flatMap { entry in
+            entry.independentClaims.map {
+                CitationTarget.claim(ClaimKey(patent: entry.key, number: $0.number))
+            }
+        }
+
         return AnswerContext(
             question: question.trimmingCharacters(in: .whitespacesAndNewlines),
             entries: entries,
             passages: passages,
-            retrieved: Set(passages.map(\.target)),
+            retrieved: Set(passages.map(\.target)).union(shownClaims),
             isCrossPatent: crossPatent,
             isLexicalOnly: isLexicalOnly)
     }
