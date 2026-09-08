@@ -172,6 +172,21 @@ final class PatentPDFService {
     /// of truth. Whether the file has arrived is asked of the filesystem every time.
     private var scanned: [PatentKey: PatentPDFAvailability] = [:]
 
+    /// Where every passage of each patent is in its PDF, for this launch.
+    ///
+    /// Cached here for the same reason `pages` is — this type is what a patent's PDF
+    /// belongs to, and it is what `LibraryService.remove` already tells to forget one. The
+    /// cost of *not* caching is the whole point: anchoring a 131-page grant is 1272
+    /// `findString` calls, and re-running them every time the reader clicks back to a patent
+    /// would make the library unusable. The map is built by `PatentPDFReaderView`, which is
+    /// the only place that has the open `PDFDocument`.
+    ///
+    /// Not persisted, and for a stronger version of `pages`' reason: a placement is a page
+    /// and an offset into a specific set of bytes, so a re-downloaded PDF would restore
+    /// highlights onto whatever text now sits at those offsets. `ReadingProgress` stores a
+    /// paragraph number precisely because that survives and this does not.
+    private var maps: [PatentKey: PatentPDFMap] = [:]
+
     init(
         store: LibraryStore,
         download: @escaping Download = { try await GooglePatentsSource().fetchPDF(at: $0) }
@@ -199,6 +214,18 @@ final class PatentPDFService {
             storedPageHTML: store.storedSource(key))
         scanned[key] = value
         return value
+    }
+
+    /// The anchor map for one patent, made empty on first ask and built by whoever has the
+    /// open document.
+    ///
+    /// Handed out rather than built here because building needs a `PDFDocument`, which is
+    /// the view layer's — this type deals in bytes and URLs and has never opened one.
+    func map(for patent: Patent) -> PatentPDFMap {
+        if let existing = maps[patent.key] { return existing }
+        let map = PatentPDFMap(patent: patent)
+        maps[patent.key] = map
+        return map
     }
 
     // MARK: - Fetching
@@ -251,12 +278,13 @@ final class PatentPDFService {
     }
 
     /// Everything this type remembers about a patent, dropped along with the patent.
-    /// `LibraryStore.remove` deletes the file; this drops the page, the scan and any
-    /// failure, so re-importing the same number starts clean rather than inheriting the
-    /// last one's error.
+    /// `LibraryStore.remove` deletes the file; this drops the page, the scan, the anchor map
+    /// and any failure, so re-importing the same number starts clean rather than inheriting
+    /// the last one's error — or, worse, the last document's placements.
     func forget(_ key: PatentKey) {
         pages[key] = nil
         attempts[key] = nil
         scanned[key] = nil
+        maps[key] = nil
     }
 }

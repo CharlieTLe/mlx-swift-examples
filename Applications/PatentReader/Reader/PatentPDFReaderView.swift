@@ -41,15 +41,40 @@ struct PatentPDFReaderView: View {
     /// ⌘F and the two find affordances: switch to the reader text, then raise the bar.
     let onFindInText: () -> Void
 
+    /// The open document, and the anchor map over it.
+    ///
+    /// **Owned here rather than inside `PatentPDFView`**, which is where `PDFDocument(url:)`
+    /// used to be called, and the move is what makes everything above the representable
+    /// possible. The map, the marks and — shortly — the find bar and the selection all have
+    /// to address the *same* `PDFDocument` instance: annotations are added to its
+    /// `PDFPage`s, and a second document opened from the same URL would be a different set
+    /// of pages with the marks on the wrong one. So one object, made once, handed down.
+    @State private var document: PDFDocument?
+    @State private var map: PatentPDFMap?
+    @State private var marks = PatentPDFMarks()
+
     var body: some View {
         Group {
             switch pdf.state(for: patent) {
             case .onDisk(let file):
-                PatentPDFView(
-                    file: file,
-                    page: Binding(
-                        get: { pdf.pages[patent.key] ?? 0 },
-                        set: { pdf.pages[patent.key] = $0 }))
+                if let document, let map, opened(document, is: file) {
+                    PatentPDFView(
+                        document: document, map: map, marks: marks,
+                        // Step by step: nothing is painted yet. The plan arrives from
+                        // `ContentView` with the answer that produced it.
+                        plan: .empty,
+                        isMapped: map.isBuilt,
+                        numbering: patent.numbering,
+                        page: Binding(
+                            get: { pdf.pages[patent.key] ?? 0 },
+                            set: { pdf.pages[patent.key] = $0 }))
+                } else {
+                    // One frame, between the file being on disk and `.task` having opened
+                    // it. Bare rather than captioned: a sentence that flashes for 16 ms is
+                    // noise, where the download below genuinely takes seconds.
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
 
             case .downloadable(let url), .downloading(from: let url):
                 // `.downloadable` renders as the spinner too: the `.task` below has
@@ -84,8 +109,34 @@ struct PatentPDFReaderView: View {
         // send — and `id:` re-runs it when the reader clicks down the library with this
         // tab up. `ensureDownloaded` is idempotent and does not retry a failure, so the
         // switching back and forth this invites costs nothing.
-        .task(id: patent.key) { await pdf.ensureDownloaded(patent) }
+        .task(id: patent.key) { await open() }
         .background { findShortcut }
+    }
+
+    /// Fetch if needed, open, and anchor.
+    ///
+    /// One task rather than three, because they are one sequence and each step's input is
+    /// the last step's output. Cancelled by `.task(id:)` when the reader moves on, which
+    /// `PatentPDFMap.build` checks between anchors — a document nobody is looking at should
+    /// not go on being walked.
+    private func open() async {
+        await pdf.ensureDownloaded(patent)
+        guard case .onDisk(let file) = pdf.state(for: patent) else { return }
+        if document == nil || !opened(document!, is: file) {
+            document = PDFDocument(url: file)
+            // The marks belong to the pages of the document that just went away.
+            marks.clear()
+        }
+        guard let document else { return }
+        let map = pdf.map(for: patent)
+        self.map = map
+        await map.build(in: document)
+    }
+
+    /// Whether an open document is the one at this URL. `PDFDocument` keeps the URL it was
+    /// made from, which is the only identity available across a view rebuild.
+    private func opened(_ document: PDFDocument, is file: URL) -> Bool {
+        document.documentURL?.standardizedFileURL == file.standardizedFileURL
     }
 
     /// "Nothing to show you, and here is why", in `ContentView.emptyState`'s furniture so
@@ -141,13 +192,23 @@ struct PatentPDFReaderView: View {
 /// `PlatformCompat.swift` the home of the PDF tab. `DocumentReaderView` is the model
 /// instead: keep the `#if`s at the smallest scope, in the feature's own file.
 ///
-/// `PDFDocument(url:)` and never `(data:)`. PDFKit memory-maps a file it is given a URL
-/// for, and a 6 MB grant read through the heap on a device already holding a 4B model and
-/// an embedder is exactly the wrong place to spend it. That is also why
-/// `LibraryStore.storedPDF` hands back a `URL`.
+/// The document arrives already open, from `PatentPDFReaderView` — see the note on its
+/// `document` property for why it is not made here. It is still made with `PDFDocument(url:)`
+/// and never `(data:)`: PDFKit memory-maps a file it is given a URL for, and a 6 MB grant
+/// read through the heap on a device already holding a 4B model and an embedder is exactly
+/// the wrong place to spend it. That is also why `LibraryStore.storedPDF` hands back a `URL`.
 @MainActor
 struct PatentPDFView {
-    let file: URL
+    let document: PDFDocument
+    let map: PatentPDFMap
+    let marks: PatentPDFMarks
+    let plan: HighlightPlan
+    /// Whether `map` has finished. A stored property and not a read of `map.isBuilt` inside
+    /// `update`, because `updateNSView` is not an observation scope: the parent reads it,
+    /// which is what re-runs this view when the walk finishes and the marks become drawable.
+    let isMapped: Bool
+    let numbering: Numbering
+
     /// The page the reader is on, zero-based, held by `PatentPDFService.pages` for this
     /// launch only.
     @Binding var page: Int
@@ -203,7 +264,7 @@ struct PatentPDFView {
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
-        load(file, into: view)
+        load(into: view)
         coordinator.observe(view)
         bind(coordinator)
         return view
@@ -211,11 +272,12 @@ struct PatentPDFView {
 
     private func update(_ view: PDFView, _ coordinator: Coordinator) {
         bind(coordinator)
-        if view.document?.documentURL?.standardizedFileURL != file.standardizedFileURL {
-            load(file, into: view)
+        if view.document !== document { load(into: view) }
+        if isMapped {
+            marks.apply(
+                plan, from: map, numbering: numbering, to: document, redrawing: view)
         }
-        guard let document = view.document, let current = view.currentPage,
-            document.index(for: current) != page
+        guard let current = view.currentPage, document.index(for: current) != page
         else { return }
         go(to: page, in: view)
     }
@@ -231,16 +293,18 @@ struct PatentPDFView {
         }
     }
 
-    private func load(_ file: URL, into view: PDFView) {
-        view.document = PDFDocument(url: file)
+    private func load(into view: PDFView) {
+        // The marks are on the pages of whatever was here before. Cleared rather than
+        // left, or the next `apply` would think they were already drawn.
+        marks.clear()
+        view.document = document
         go(to: page, in: view)
     }
 
     /// Bounds-checked, because the remembered page belongs to the last document opened at
     /// this key and a re-imported patent may be a shorter one.
     private func go(to index: Int, in view: PDFView) {
-        guard let document = view.document, index >= 0, index < document.pageCount,
-            let target = document.page(at: index)
+        guard index >= 0, index < document.pageCount, let target = document.page(at: index)
         else { return }
         view.go(to: target)
     }
