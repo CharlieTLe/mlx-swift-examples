@@ -1594,32 +1594,72 @@ enum SelfTest {
             anchors.first { $0.target == target }
         }
 
-        // A paragraph's needle is exactly six single-spaced words of its own text, written
-        // out here rather than derived, so that a change to the rule has to be typed twice.
+        // Where the office printed a marker, the marker is the needle and the six words are
+        // demoted to the fallback. This fixture prints them, so `[0001]` is what gets looked
+        // for — and it has to be *exactly* what the chip says, because a chip that names one
+        // paragraph while the needle finds another is the failure this whole file guards.
         let first = ParagraphKey(patent: patent.key, number: 1)
+        log.equal(patent.numbering, .printed, "US10123456B2 prints its paragraph numbers")
         log.equal(
-            anchor(.paragraph(first))?.needle, "The present disclosure is directed, in",
-            "the needle for [0001]")
-        log.check(
-            anchor(.paragraph(first))?.fallback == nil,
-            "a paragraph should carry no fallback needle")
+            anchor(.paragraph(first))?.needle, "[0001]", "the needle for [0001]")
+        log.equal(
+            anchor(.paragraph(first))?.needle,
+            Citation.chipLabel(.paragraph(first), numbering: patent.numbering),
+            "a printed paragraph's needle and its chip must be the same string")
+        log.equal(
+            anchor(.paragraph(first))?.fallback, "The present disclosure is directed, in",
+            "the fallback for [0001] is the opening words the needle used to be")
 
-        // Every needle is exactly six words, single-spaced, and is a prefix of the
-        // paragraph's own text — the invariant that makes it findable at all.
+        // The fallback keeps every rule the needle used to carry: six words, single-spaced,
+        // and a prefix of the paragraph's own text — the invariant that makes it findable.
         for anchor in anchors {
             guard case .paragraph(let key) = anchor.target,
                 let paragraph = patent.paragraph(numbered: key.number)
             else { continue }
             log.equal(
-                anchor.needle.split(separator: " ").count, PassageAnchors.paragraphWords,
-                "the word count of the needle for [\(key.number)]")
+                anchor.needle, Citation.printedMarker(key),
+                "the needle for [\(key.number)] is its printed marker")
+            guard let fallback = anchor.fallback else { continue }
+            log.equal(
+                fallback.split(separator: " ").count, PassageAnchors.paragraphWords,
+                "the word count of the fallback for [\(key.number)]")
             log.check(
-                !anchor.needle.contains("  "),
-                "the needle for [\(key.number)] is not single-spaced")
+                !fallback.contains("  "),
+                "the fallback for [\(key.number)] is not single-spaced")
             log.check(
                 PassageAnchors.normalized(paragraph.text)
-                    .hasPrefix(PassageAnchors.normalized(anchor.needle)),
-                "the needle for [\(key.number)] is not the paragraph's own opening")
+                    .hasPrefix(PassageAnchors.normalized(fallback)),
+                "the fallback for [\(key.number)] is not the paragraph's own opening")
+        }
+
+        // And where the office printed nothing there is no marker to look for, so the
+        // opening words stay the needle and there is nothing weaker to fall back to. This is
+        // the branch that must not accidentally look for `[0001]` in a document that never
+        // printed one — it would find nothing, every paragraph would go unplaced, and the
+        // diagnostics line would read `anchored 0/n` on a document that anchors fine today.
+        if let unnumbered = parsed("US5000000A") {
+            log.equal(
+                unnumbered.numbering, .synthesized,
+                "US5000000A carries no printed paragraph numbers")
+            let theirs = PassageAnchors.anchors(in: unnumbered)
+            for anchor in theirs {
+                guard case .paragraph(let key) = anchor.target,
+                    let paragraph = unnumbered.paragraph(numbered: key.number)
+                else { continue }
+                log.check(
+                    anchor.fallback == nil,
+                    "a synthesized paragraph should carry no fallback needle")
+                log.equal(
+                    anchor.needle.split(separator: " ").count,
+                    PassageAnchors.paragraphWords,
+                    "the word count of the needle for ¶\(key.number)")
+                log.check(
+                    PassageAnchors.normalized(paragraph.text)
+                        .hasPrefix(PassageAnchors.normalized(anchor.needle)),
+                    "the needle for ¶\(key.number) is not the paragraph's own opening")
+            }
+        } else {
+            log.fail("could not load US5000000A for the synthesized anchor checks")
         }
 
         // A claim's needle is its printed number and its preamble, and **never** spills

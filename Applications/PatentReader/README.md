@@ -336,17 +336,48 @@ US grant, a 57-page PCT application as filed — anchoring on text from the app'
 
 | | PCT publication | US grant (2 col) | PCT as filed |
 |---|---|---|---|
+| numbering, as parsed | **printed** | synthesized | synthesized |
+| paragraphs located, **printed marker** | **437/437** | — | — |
 | paragraphs located, first **6** words | 428/437 (97%) | 1241/1272 (97%) | 284/289 (98%) |
-| of those, **ambiguous** (2–4+ matches) | 242 | 822 | 63 |
-| placed in ascending order after the monotonic pass | **428, 0 stuck** | **1241, 0 stuck** | **284, 0 stuck** |
-| placements the monotonic pass *changed* vs first-match | 179 (42%) | 715 (58%) | 44 (15%) |
+| of those, **ambiguous** (2–4+ matches) | 0 / 242 | 822 | 63 |
+| placed in ascending order after the monotonic pass | **437, 0 stuck** | **1241, 0 stuck** | **284, 0 stuck** |
+| placements the monotonic pass *changed* vs first-match | 0 / 179 (42%) | 715 (58%) | 44 (15%) |
+| of the placements, **on the right passage** | **437/437** / 368 of 428 | not measurable | not measurable |
 | claims, `"7. "` + first **4** words | 113/120 (94%) | 20/20 | 21/21 |
 | `findString` cost, warm | ~2 ms per anchor; a whole document 0.3–2.8 s | | |
 
+Where two numbers appear the first is the printed marker and the second is what the
+opening-words needle scored on the same document, kept because it is what the other two
+columns still do.
+
+**"Placed" was not "placed correctly", and the gap was 60 paragraphs.** The publication
+prints `[00355]`-style markers, each unique across all 437, so its placements can be checked
+against ground truth rather than merely counted — and 60 of the 428 the opening-words needle
+placed were on the wrong passage. Not scattered: runs. `[00374]` through `[00389]` each
+landed on the *previous* paragraph and slid up to two pages, because a patent writes "In
+some embodiments, the …" for pages at a stretch, so every needle in the run matched its
+neighbour. The placements ascended, so `monotonic` had no complaint, and the diagnostics
+line read 428/437 with nothing anywhere saying 60 of them were wrong. That is the quietest
+failure this feature has, and counting placements can never see it.
+
+Anchoring on the marker the office printed removes the whole class: one candidate each,
+ambiguity from 242 to 0, the monotonic pass changing nothing because there is nothing to
+resolve, and 437 of 437 on the right passage. The opening words stay as the fallback, for a
+document whose brackets the OCR dropped.
+
 Four findings decided the design, each of which had a plausible wrong answer:
 
-- **Short anchors win.** Twelve words fell to about 50% — line wrap and hyphenation break a
-  long match, and `findString` crosses neither. Six is the sweet spot; four for a claim.
+- **Read the office's own index before guessing.** Where `Numbering` is `.printed` the
+  document carries an exact, unique address for every paragraph and the app spent a release
+  inferring one from the prose instead. This is first because it is the one that was wrong
+  for the longest, and because the argument against it — "the PDF carries no index this app
+  can resolve `[0042]` against" — is the same argument, quoted two sections above, that this
+  whole feature already proved false once.
+
+- **Short anchors win**, where prose is what there is to anchor on. Twelve words fell to
+  about 50% — line wrap and hyphenation break a long match, and `findString` crosses
+  neither. Six is the sweet spot; four for a claim. This still decides both fallbacks and
+  every paragraph of a `.synthesized` document.
 - **Ambiguity is the norm, and ordering resolves it.** Most anchors match in several places,
   because that is what a patent is: it says "the internal matrix 130" in the summary, again
   in the description, and again in a claim. Every candidate gets a *text-stream* ordinal —
@@ -411,7 +442,9 @@ rectangle, which on a two-column grant covers the neighbouring column.
 
 #### When a passage cannot be located
 
-3% of paragraphs and about 6% of claims. It is **reported, three times over**, in the three
+None of a document that prints its markers, since the marker is always there to be found;
+3% of paragraphs where it does not, and about 6% of claims either way. It is **reported,
+three times over**, in the three
 places this app already reports things:
 
 1. the reader is scrolled to the nearest passage that *was* found, and it is marked focused;
@@ -615,9 +648,13 @@ suites, including:
   documents in four, which is exactly the shape of change that gets made as a
   simplification and then 404s for a quarter of a library.
 - **`passageAnchors`** — the needles, which is where the app's central promise is defended
-  in a form a build can check. A paragraph's is exactly six single-spaced words, checked
-  against a hand-written expectation *and* against the invariant that it is a prefix of the
-  paragraph's own text; a claim's is `"7. "` plus four words and **never** spills into
+  in a form a build can check. Where the office printed markers a paragraph's needle is that
+  marker, asserted to be the very string the chip shows — the two rendering a width
+  differently would name one paragraph and land on another — with the six words demoted to
+  the fallback and keeping every rule they had. Where it printed none, the six words are
+  still the needle and there is no fallback, which is the branch that must not go looking
+  for `[0001]` in a document that never contained one. A claim's is `"7. "` plus four words
+  and **never** spills into
   `elements` — the 20/20-against-3/20 measurement, pinned so that a "simplification" fails
   the build. No anchor for paragraph 0, which is `Chunker`'s synthetic front matter and
   exists in no document. Anchors ascend in document order, which is what the placement pass

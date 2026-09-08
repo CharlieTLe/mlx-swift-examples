@@ -108,13 +108,32 @@ enum PassageAnchors {
                 // paragraph zero would otherwise hand the map a needle that cannot be found
                 // and a citation that can never be checked.
                 guard paragraph.number > 0 else { continue }
-                guard let needle = opening(paragraph.text, words: paragraphWords)
-                else { continue }
-                out.append(
-                    PassageAnchor(
-                        target: .paragraph(
-                            ParagraphKey(patent: patent.key, number: paragraph.number)),
-                        needle: needle, fallback: nil))
+                let key = ParagraphKey(patent: patent.key, number: paragraph.number)
+                let opening = self.opening(paragraph.text, words: paragraphWords)
+                // Where the office printed a marker, that marker *is* the index, and
+                // guessing from the prose instead was this app declining to read the one
+                // exact thing on the page. Measured on WO 2020247738 A9, whose 437 markers
+                // are each unique in the document: the opening-words needle placed 428 and
+                // 60 of those were on the wrong passage, because a patent writes "In some
+                // embodiments, the ..." for pages at a stretch and each needle matched its
+                // neighbour. The placements ascended, so `monotonic` had no complaint and
+                // the whole run slid one paragraph — up to two pages by the end of it. The
+                // marker does not have that failure available to it.
+                //
+                // Still a fallback and not a certainty: a scanned grant whose brackets the
+                // OCR dropped prints `[0001]` as `0001.`, and `Numbering` records what the
+                // *parse* found rather than what the PDF renders, so the two can disagree.
+                // The prose needle stays underneath for exactly that.
+                if patent.numbering == .printed {
+                    out.append(
+                        PassageAnchor(
+                            target: .paragraph(key),
+                            needle: Citation.printedMarker(key), fallback: opening))
+                } else if let opening {
+                    out.append(
+                        PassageAnchor(
+                            target: .paragraph(key), needle: opening, fallback: nil))
+                }
             }
         }
 

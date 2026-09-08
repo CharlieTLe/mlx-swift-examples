@@ -351,11 +351,22 @@ enum Citation {
     static func chipLabel(_ target: CitationTarget, numbering: Numbering) -> String {
         switch target {
         case .paragraph(let key):
-            numbering == .printed
-                ? "[\(padded(key.number, country: key.patent.country))]" : "¶\(key.number)"
+            numbering == .printed ? printedMarker(key) : "¶\(key.number)"
         case .claim(let key):
             "claim \(key.number)"
         }
+    }
+
+    /// The marker the office printed at the head of this paragraph: `[00355]`, `[0042]`.
+    ///
+    /// One function because it is two things at once, and they must not drift apart. It is
+    /// what a chip says, and — where `Numbering` is `.printed` — it is also the needle
+    /// `PassageAnchors` looks for in the document, because a marker the office printed is a
+    /// better index into the office's own PDF than any guess made from the prose. If the
+    /// chip and the needle ever rendered the width differently, the chip would name one
+    /// paragraph and the jump would land on another.
+    static func printedMarker(_ key: ParagraphKey) -> String {
+        "[\(padded(key.number, country: key.patent.country))]"
     }
 
     private static func paragraphLabel(
