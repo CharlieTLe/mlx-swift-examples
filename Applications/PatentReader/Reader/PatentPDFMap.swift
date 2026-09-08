@@ -245,16 +245,34 @@ final class PatentPDFMap {
         return nil
     }
 
-    /// Which passage a position in the text stream falls inside.
+    /// Every passage a selection touches, in document order.
     ///
-    /// The last placement at or before it, which is the passage that was open at that point
-    /// in the document. **This never compares text**, which is the whole reason it is
-    /// preferred over `PassageAnchors.target(containing:)`: hyphenation, OCR damage and a
-    /// two-column drag that scrambles the order cannot defeat an integer comparison.
+    /// **This is the leg ⇧⌘C runs on, and it never compares a character.** The reader's drag
+    /// has two ends; each end is a `(page, offset)` in the text stream; each falls inside the
+    /// bracket of whichever passage was open there. Two binary searches and a slice. Nothing
+    /// in that can be defeated by hyphenation, by justification, or by the OCR damage that
+    /// makes US10123456B2 claim 5 read "wherein fon ling the internal matrix" in Google's
+    /// text and something else in the office's PDF — which is exactly why it is preferred to
+    /// `PassageAnchors.target(containing:)`, the textual fallback for a selection that lands
+    /// outside every bracket.
     ///
-    /// `nil` before the first placement, which is the front matter — a cover page, an
-    /// abstract, a drawing sheet — where there is genuinely no passage to name.
-    func target(at position: Candidate) -> CitationTarget? {
+    /// Empty for a drag over a cover page, a drawing sheet or anything else before the first
+    /// placement, which is a real answer: there is no passage there to name.
+    func targets(spanning selection: PDFSelection, in document: PDFDocument)
+        -> [CitationTarget]
+    {
+        guard
+            let start = Self.position(of: selection, first: true, in: document),
+            let end = Self.position(of: selection, first: false, in: document),
+            let low = index(containing: start)
+        else { return [] }
+        let high = index(containing: end) ?? low
+        guard low <= high else { return [] }
+        return ordinals[low ... high].map(\.target)
+    }
+
+    /// The index into `ordinals` of the passage a position falls inside.
+    private func index(containing position: Candidate) -> Int? {
         var low = 0
         var high = ordinals.count
         while low < high {
@@ -265,7 +283,18 @@ final class PatentPDFMap {
                 high = middle
             }
         }
-        return low > 0 ? ordinals[low - 1].target : nil
+        return low > 0 ? low - 1 : nil
+    }
+
+    /// Which passage a position in the text stream falls inside.
+    ///
+    /// The last placement at or before it, which is the passage that was open at that point
+    /// in the document.
+    ///
+    /// `nil` before the first placement, which is the front matter — a cover page, an
+    /// abstract, a drawing sheet — where there is genuinely no passage to name.
+    func target(at position: Candidate) -> CitationTarget? {
+        index(containing: position).map { ordinals[$0].target }
     }
 
     /// The text-stream position of a point in a `PDFSelection`, for `target(at:)`.

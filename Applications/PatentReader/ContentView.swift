@@ -120,6 +120,17 @@ struct ContentView: View {
     /// header button here, and the overflow row on a phone.
     @State private var findRequest = 0
 
+    /// Bumped to copy the reader's selection with its citation. ⇧⌘C's counterpart for the
+    /// iOS overflow row, where there is no ⇧⌘C.
+    @State private var copyRequest = 0
+
+    /// Whether there is a non-empty text selection in the open PDF.
+    ///
+    /// Reported up from `PatentPDFReaderView`, because the selection itself is a live
+    /// `PDFSelection` and belongs in the view layer. Two call sites: scoping a question, and
+    /// enabling the phone's copy row.
+    @State private var hasOriginalSelection = false
+
     init(options: AppOptions) {
         self.options = options
         _service = State(
@@ -377,6 +388,8 @@ struct ContentView: View {
                         PatentPDFReaderView(
                             patent: patent, pdf: library.pdf, plan: highlightPlan,
                             findRequest: findRequest,
+                            copyRequest: copyRequest,
+                            onSelection: { hasOriginalSelection = $0 },
                             onCancel: { cancel() })
                     }
                 }
@@ -546,7 +559,7 @@ struct ContentView: View {
                     findRequest += 1
                 }
                 Button("Copy passage", systemImage: "doc.on.doc") { copySelection() }
-                    .disabled(selection == nil || readerTab != .text)
+                    .disabled(!canCopySelection)
                 Button("Clear selection", systemImage: "xmark") { selection = nil }
                     .disabled(selection == nil || readerTab != .text)
                 Divider()
@@ -558,9 +571,19 @@ struct ContentView: View {
             .accessibilityLabel("More")
         }
 
-        /// ⌘C's counterpart. `DocumentReaderView` cannot own this the way it owns
-        /// `copyItem()`: the menu is in the navigation bar, which is this view's.
+        /// Whether there is anything for the copy row to copy, on whichever reader is up.
+        private var canCopySelection: Bool {
+            readerTab == .text ? selection != nil : hasOriginalSelection
+        }
+
+        /// ⌘C's counterpart. Neither reader can own this: the menu is in the navigation bar,
+        /// which is this view's. The PDF's half is a request rather than a call, because the
+        /// selection it copies is a live `PDFSelection` that never leaves the view layer.
         private func copySelection() {
+            guard readerTab == .text else {
+                copyRequest += 1
+                return
+            }
             guard let patent, let selection,
                 let range = selection.clamped(to: rows)?.range
             else { return }
@@ -1265,11 +1288,17 @@ struct ContentView: View {
         showsAnswers = true
 
         // Scoped to the selection when there is one, and to the whole library otherwise.
-        // Selecting rows and then asking is how a reader says "about this bit", and it is
-        // the only scoping gesture the app has.
+        // Selecting and then asking is how a reader says "about this bit", and it is the
+        // only scoping gesture the app has. Either reader's selection counts, because the
+        // gesture is the same one — the reader has their finger on a passage.
+        //
+        // **Scoped to the patent, not to the selected passages**, which is unchanged rather
+        // than overlooked: `Retriever`'s scope is a `Set<PatentKey>`, and narrowing
+        // retrieval to a span inside one document is a different feature with its own
+        // ranking question.
+        let hasScope = selection != nil || (hasOriginalSelection && readerTab == .original)
         let scope: Set<PatentKey>? =
-            selection != nil && openPatent != nil
-            ? [openPatent!] : nil
+            hasScope && openPatent != nil ? [openPatent!] : nil
 
         let started = Date()
         Task {

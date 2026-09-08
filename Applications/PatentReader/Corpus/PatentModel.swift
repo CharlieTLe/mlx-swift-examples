@@ -369,12 +369,45 @@ enum Citation {
         let references = rows.compactMap { $0.target(in: patent.key) }.map {
             string($0, numbering: patent.numbering)
         }
-        // One reference for a passage inside one paragraph, a range for a sweep across
-        // several. Deduplicated in order, because a long paragraph is several rows.
+        // A selection of headings alone cites nothing and gets no trailer, which is what
+        // `DocumentRow.target(in:)` already decided.
+        guard let trailer = trailer(references) else { return body }
+        return body + "\n\n" + trailer
+    }
+
+    /// The same, for text the reader dragged out of the office's own PDF.
+    ///
+    /// **What was selected**, verbatim, and not the paragraphs it fell inside. A drag across
+    /// half a sentence is a request to quote half a sentence; handing back the two whole
+    /// paragraphs it touched would be the app deciding what the reader meant to copy.
+    /// `targets` therefore only supplies the trailer.
+    ///
+    /// The one case that arises only here is a selection this app could not place, and it is
+    /// not rare enough to pass over in silence: 3% of paragraphs cannot be located in their
+    /// own PDF, and a drag across a cover page or a figure caption falls outside every
+    /// passage there is. So it is *said*, in the copied text itself, where it will still be
+    /// true after the paste. A quotation in somebody's brief with no citation is a problem
+    /// they can see; one with a citation this app guessed at is not.
+    static func quotation(_ patent: Patent, text: String, targets: [CitationTarget]) -> String {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return body }
+        let references = targets.map { string($0, numbering: patent.numbering) }
+        guard let trailer = trailer(references) else {
+            return body + "\n\n\(patent.key.display) "
+                + "(this reader could not tell which passage this is)"
+        }
+        return body + "\n\n" + trailer
+    }
+
+    /// One reference for a passage inside one paragraph, a range for a sweep across
+    /// several, `nil` for a selection that cites nothing.
+    ///
+    /// Deduplicated in order, because a long paragraph is several rows and a long drag
+    /// crosses one passage several times.
+    private static func trailer(_ references: [String]) -> String? {
         var seen: Set<String> = []
         let unique = references.filter { seen.insert($0).inserted }
-        guard let first = unique.first else { return body }
-        let trailer = unique.count == 1 ? first : "\(first) – \(unique[unique.count - 1])"
-        return body + "\n\n" + trailer
+        guard let first = unique.first else { return nil }
+        return unique.count == 1 ? first : "\(first) – \(unique[unique.count - 1])"
     }
 }

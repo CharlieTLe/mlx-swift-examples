@@ -17,15 +17,18 @@ import SwiftUI
 ///   find UI on either platform — Preview's find bar is Preview's own code over the same
 ///   call — so this app builds one, out of the same `FindBar` the text reader used, byte for
 ///   byte. See `PatentPDFFind` for why finding does not select.
-/// - **⇧⌘C** is not here yet. `Citation.quotation` still needs `[DocumentRow]`; resolving a
-///   `PDFSelection` back to the passages it spans is the next thing to move.
-/// - **⌘C** is PDFKit's own, and copies the selected text uncited.
+/// - **⇧⌘C** copies the selection with its citation. It resolves a `PDFSelection` back to
+///   the passages it spans through `PatentPDFMap.targets(spanning:)`, which compares
+///   ordinals and never characters — so hyphenation and OCR damage cannot break it.
+/// - **⌘C** is PDFKit's own, and copies the selected text uncited. Left alone deliberately:
+///   ⌘C is what a reader presses to copy the phrase they just dragged out, and ⇧⌘C is the
+///   one that means "with the citation".
 /// - **Arrows, space, page up and down** are PDFKit's scrolling, which is why there is no
 ///   `.focusable()` on the host below: `PDFView`'s document view takes first responder
 ///   itself, and a SwiftUI focus item over it would compete for the keys.
-/// - **Esc** is a ladder — the find bar, then (shortly) the selection, then `onCancel` —
-///   through a `.keyboardShortcut(.escape)` button rather than `.onExitCommand`, for the
-///   first-responder reason just above.
+/// - **Esc** is a ladder — the find bar, then the selection, then `onCancel` — through a
+///   `.keyboardShortcut(.escape)` button rather than `.onExitCommand`, for the first-
+///   responder reason just above.
 ///
 /// A citation chip lands here as well as in the text: see `PatentPDFMap`, which is what
 /// resolves `[0042]` against a document that carries no paragraph index of its own.
@@ -45,6 +48,17 @@ struct PatentPDFReaderView: View {
     /// This exists for the affordances that are not a key: the macOS header button, and the
     /// iOS overflow row, where there is no ⌘F to press.
     let findRequest: Int
+
+    /// ⇧⌘C's counterpart for a phone, where there is no ⇧⌘C. Same counter idiom.
+    let copyRequest: Int
+
+    /// Whether the reader has text selected here, reported upward on every transition.
+    ///
+    /// `ContentView` needs it for two things it owns: scoping a question to the open patent,
+    /// and enabling the iOS overflow's copy row. A `Bool` and not the selection, because the
+    /// selection is a live reference into a `PDFDocument` and has no business leaving the
+    /// view layer.
+    let onSelection: (Bool) -> Void
 
     /// Esc's last rung. See `escape()`.
     let onCancel: () -> Void
@@ -70,6 +84,21 @@ struct PatentPDFReaderView: View {
 
     /// What to say when a citation could not be landed on. See `band`.
     @State private var band: String?
+
+    /// What the reader has selected, and whether there is anything.
+    ///
+    /// Two of them, and the split is deliberate. The selection itself is a live
+    /// `PDFSelection` held in a plain box that **nothing reads during `body`**, so the
+    /// several dozen notifications a single drag produces re-render nothing. `hasSelection`
+    /// is read during `body` and changes at most twice per drag, which is the only part of
+    /// this the layout actually depends on.
+    @State private var selected = PDFSelectionBox()
+    @State private var hasSelection = false
+
+    /// Bumped to ask the representable to drop the selection — Esc's middle rung. A counter
+    /// rather than a write to `selected`, because `PDFView` owns `currentSelection` and two
+    /// writers over one property is the fight `bind(_:)` already documents for the page.
+    @State private var clearSelectionRequest = 0
 
     var body: some View {
         Group {
@@ -97,6 +126,8 @@ struct PatentPDFReaderView: View {
                             find: find,
                             isMapped: map.isBuilt,
                             numbering: patent.numbering,
+                            clearSelectionRequest: clearSelectionRequest,
+                            onSelectionChange: { note($0) },
                             page: Binding(
                                 get: { pdf.pages[patent.key] ?? 0 },
                                 set: { pdf.pages[patent.key] = $0 }))
@@ -145,7 +176,73 @@ struct PatentPDFReaderView: View {
         .task(id: patent.key) { await open() }
         .task(id: bandRequest) { await raiseBand() }
         .onChange(of: findRequest) { startFinding() }
+        .onChange(of: copyRequest) { copyPassage() }
         .background { shortcuts }
+    }
+
+    // MARK: - Selection
+
+    /// The reader selected, or deselected, or dragged another point.
+    ///
+    /// Reported upward only on the transition between something and nothing, which is all
+    /// `ContentView` acts on — and all it *should* act on. **The question is scoped to the
+    /// patent, not to the selected paragraphs**, and that is unchanged rather than
+    /// overlooked: `Retriever`'s scope is a `Set<PatentKey>`, and narrowing retrieval to a
+    /// span inside one document is a different feature with its own ranking question.
+    /// Selecting and then asking has always meant "about this patent"; it still does.
+    private func note(_ selection: PDFSelection?) {
+        selected.selection = selection
+        let text = selection?.string ?? ""
+        let has = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard has != hasSelection else { return }
+        hasSelection = has
+        onSelection(has)
+    }
+
+    /// ⇧⌘C, and why the app's own copy has a key of its own.
+    ///
+    /// ⌘C is what a reader presses to copy the phrase they just dragged out, and PDFKit
+    /// already does that — uncited, which is the right answer for the system copy. The
+    /// citation-appended quotation is a genuinely different thing, so it gets a shortcut of
+    /// its own rather than depending on which handler the responder chain offers ⌘C first.
+    ///
+    /// **Two legs, and the first one never compares text.** `PatentPDFMap.targets(spanning:)`
+    /// resolves the drag's two ends against the ordinals it already computed, so hyphenation
+    /// and OCR cannot break it. `PassageAnchors.target(containing:)` is the textual fallback
+    /// for a selection that falls outside every bracket the map placed. When both fail the
+    /// text is copied **uncited and says so** — see `Citation.quotation(_:text:targets:)`.
+    private func copyPassage() {
+        guard let document, let selection = selected.selection else { return }
+        let text = selection.string ?? ""
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        var targets = map?.targets(spanning: selection, in: document) ?? []
+        if targets.isEmpty,
+            let recovered = PassageAnchors.target(containing: text, in: patent)
+        {
+            targets = [recovered]
+        }
+        copyToPasteboard(Citation.quotation(patent, text: text, targets: targets))
+        reportImplausibleSpan(targets, for: text)
+    }
+
+    /// **Two-column selection is PDFKit's to get wrong**, and this is where it shows.
+    ///
+    /// A drag down one column of a two-column grant can pick up the other in text-stream
+    /// order, because the stream runs down the left column and back up to the top of the
+    /// right. The bracket lookup copes — it produces a range citation, which is *true*: the
+    /// selection really does span those passages. What is not true is that the copied text
+    /// reads as prose, because it does not; it reads scrambled.
+    ///
+    /// So it is reported rather than silently corrected, on the one signal that separates
+    /// the two cases: a span of many passages from a small amount of text. A genuine drag
+    /// across four paragraphs carries four paragraphs of words.
+    private func reportImplausibleSpan(_ targets: [CitationTarget], for text: String) {
+        guard targets.count > 3, text.count < 200 else { return }
+        band =
+            "That selection spans \(targets.count) passages but is only \(text.count) "
+            + "characters. On a two-column page a drag can pick up both columns in the "
+            + "order the text was laid down; check what was copied before quoting it."
     }
 
     // MARK: - Finding
@@ -201,11 +298,16 @@ struct PatentPDFReaderView: View {
             stopFinding()
             return
         }
+        if hasSelection {
+            clearSelectionRequest += 1
+            return
+        }
         onCancel()
     }
 
-    /// ⌘F, ⌘G, ⇧⌘G and Esc. Keyboard shortcuts need a control to hang off; zero-opacity
-    /// rather than `.hidden()`, which removes it from the hierarchy along with its shortcut.
+    /// ⌘F, ⌘G, ⇧⌘G, ⇧⌘C and Esc. Keyboard shortcuts need a control to hang off;
+    /// zero-opacity rather than `.hidden()`, which removes it from the hierarchy along with
+    /// its shortcut.
     ///
     /// **⌘F is the document's, and the library's filter is on ⌥⌘F to give it up.** Of the two
     /// fields this is the one ⌘F means everywhere else: find in the thing I am reading.
@@ -218,6 +320,8 @@ struct PatentPDFReaderView: View {
                 .keyboardShortcut("g", modifiers: .command)
             Button("Find previous") { find.advance(by: -1) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
+            Button("Copy passage with citation") { copyPassage() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
             Button("Cancel") { escape() }
                 .keyboardShortcut(.escape, modifiers: [])
         }
@@ -384,21 +488,25 @@ struct PatentPDFView {
     /// which is what re-runs this view when the walk finishes and the marks become drawable.
     let isMapped: Bool
     let numbering: Numbering
+    /// Bumped by Esc to drop the selection. See `PatentPDFReaderView.clearSelectionRequest`.
+    let clearSelectionRequest: Int
+    let onSelectionChange: (PDFSelection?) -> Void
 
     /// The page the reader is on, zero-based, held by `PatentPDFService.pages` for this
     /// launch only.
     @Binding var page: Int
 
-    /// Watches the view's own page changes, and nothing else's.
+    /// Watches the view's own page and selection changes, and nothing else's.
     ///
-    /// Scoped with `object: view`, because `.PDFViewPageChanged` is posted by every
-    /// `PDFView` in the process and an unscoped observer would write one patent's page
-    /// number from another patent's scrolling.
+    /// Scoped with `object: view` in both cases, because `.PDFViewPageChanged` and
+    /// `.PDFViewSelectionChanged` are posted by every `PDFView` in the process and an
+    /// unscoped observer would write one patent's state from another patent's document.
     @MainActor
     final class Coordinator {
-        /// Re-assigned on every `update`, so the binding written here is always the
-        /// current one rather than the one captured when the view was made.
+        /// Re-assigned on every `update`, so the closures called here are always the
+        /// current ones rather than the ones captured when the view was made.
         var onPageChange: (Int) -> Void = { _ in }
+        var onSelectionChange: (PDFSelection?) -> Void = { _ in }
 
         /// The last jump acted on. Identity and not the target, because clicking the same
         /// chip twice has to move twice — the reason `PassageFocus` carries a `UUID` at all.
@@ -408,31 +516,44 @@ struct PatentPDFView {
         /// place would be "no change" and the second ⌘G would silently not scroll.
         var lastFindStep = 0
 
+        /// The last Esc acted on.
+        var lastClear = 0
+
         /// `nonisolated(unsafe)` so that `deinit`, which is not main-actor isolated, can
-        /// hand the token back. It is written once on the main actor while the view is
+        /// hand the tokens back. They are written once on the main actor while the view is
         /// alive and read once when nothing else holds this object, which is the whole of
         /// the unsafety.
-        private nonisolated(unsafe) var token: (any NSObjectProtocol)?
+        private nonisolated(unsafe) var tokens: [any NSObjectProtocol] = []
 
         func observe(_ view: PDFView) {
-            guard token == nil else { return }
-            token = NotificationCenter.default.addObserver(
-                forName: .PDFViewPageChanged, object: view, queue: .main
-            ) { [weak self, weak view] _ in
-                // The block is `@Sendable` and non-isolated, and `PDFDocument` is not
-                // `Sendable`, so every PDFKit touch has to stay on the main actor. The
-                // assumption is sound rather than hopeful: `queue: .main`.
-                MainActor.assumeIsolated {
-                    guard let self, let view, let document = view.document,
-                        let current = view.currentPage
-                    else { return }
-                    self.onPageChange(document.index(for: current))
-                }
-            }
+            guard tokens.isEmpty else { return }
+            tokens.append(
+                NotificationCenter.default.addObserver(
+                    forName: .PDFViewPageChanged, object: view, queue: .main
+                ) { [weak self, weak view] _ in
+                    // The block is `@Sendable` and non-isolated, and `PDFDocument` is not
+                    // `Sendable`, so every PDFKit touch has to stay on the main actor. The
+                    // assumption is sound rather than hopeful: `queue: .main`.
+                    MainActor.assumeIsolated {
+                        guard let self, let view, let document = view.document,
+                            let current = view.currentPage
+                        else { return }
+                        self.onPageChange(document.index(for: current))
+                    }
+                })
+            tokens.append(
+                NotificationCenter.default.addObserver(
+                    forName: .PDFViewSelectionChanged, object: view, queue: .main
+                ) { [weak self, weak view] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, let view else { return }
+                        self.onSelectionChange(view.currentSelection)
+                    }
+                })
         }
 
         deinit {
-            if let token { NotificationCenter.default.removeObserver(token) }
+            for token in tokens { NotificationCenter.default.removeObserver(token) }
         }
     }
 
@@ -462,6 +583,10 @@ struct PatentPDFView {
             // made again.
             coordinator.lastFocus = nil
             coordinator.lastFindStep = 0
+        }
+        if coordinator.lastClear != clearSelectionRequest {
+            coordinator.lastClear = clearSelectionRequest
+            view.clearSelection()
         }
         // The remembered page is reconciled **before** the jump, deliberately. A jump moves
         // the view and `.PDFViewPageChanged` catches `page` up a turn later, so reconciling
@@ -516,8 +641,8 @@ struct PatentPDFView {
         view.go(to: selection)
     }
 
-    /// Points the coordinator at *this* instance's binding, on every update, so the page
-    /// it writes is never the one captured when the view was made.
+    /// Points the coordinator at *this* instance's closures, on every update, so what they
+    /// write is never captured from when the view was made.
     private func bind(_ coordinator: Coordinator) {
         coordinator.onPageChange = { reported in
             // Only when it differs, or this writes the state that produced it and the
@@ -525,6 +650,7 @@ struct PatentPDFView {
             guard reported != page else { return }
             page = reported
         }
+        coordinator.onSelectionChange = onSelectionChange
     }
 
     private func load(into view: PDFView) {
@@ -562,3 +688,16 @@ struct PatentPDFView {
         }
     }
 #endif
+
+/// A live `PDFSelection`, held where nothing observes it.
+///
+/// A plain reference box and deliberately **not** `@Observable`. A single drag posts
+/// `.PDFViewSelectionChanged` dozens of times, and every one of them would re-render the
+/// reader pane if this were observed — for a value only two call sites read, both of them
+/// outside `body`: ⇧⌘C and Esc. What the layout does depend on is whether there is a
+/// selection at all, and `PatentPDFReaderView.hasSelection` carries that separately, changing
+/// at most twice per drag.
+@MainActor
+final class PDFSelectionBox {
+    var selection: PDFSelection?
+}

@@ -518,6 +518,50 @@ enum SelfTest {
         log.check(
             CitationLink.target(from: URL(string: "https://example.com")!) == nil,
             "a foreign URL should not resolve to a citation")
+
+        // MARK: The quotation a selection copies
+
+        guard let patent = parsed("US10123456B2") else {
+            log.fail("could not load US10123456B2 for the quotation checks")
+            return
+        }
+        let first = CitationTarget.paragraph(
+            ParagraphKey(patent: patent.key, number: 1))
+        let second = CitationTarget.paragraph(
+            ParagraphKey(patent: patent.key, number: 2))
+
+        // What was selected, verbatim, and the citation under it — never the whole
+        // paragraph the selection fell inside.
+        log.equal(
+            Citation.quotation(patent, text: "a phase change material", targets: [first]),
+            "a phase change material\n\nUS 10,123,456 B2 · [0001]",
+            "a part-paragraph selection")
+
+        // A drag across several passages gets a range, deduplicated in order.
+        log.equal(
+            Citation.quotation(
+                patent, text: "two paragraphs", targets: [first, first, second]),
+            "two paragraphs\n\nUS 10,123,456 B2 · [0001] – US 10,123,456 B2 · [0002]",
+            "a selection spanning two passages")
+
+        // **The case that matters most.** A selection this app could not place is copied
+        // uncited *and says so*, in the copied text, where it is still true after the paste.
+        log.equal(
+            Citation.quotation(patent, text: "something off a cover page", targets: []),
+            "something off a cover page\n\nUS 10,123,456 B2 "
+                + "(this reader could not tell which passage this is)",
+            "a selection that could not be placed")
+        log.check(
+            !Citation.quotation(patent, text: "x", targets: []).contains("·"),
+            "an unplaced selection must not carry a passage citation")
+        log.equal(
+            Citation.quotation(patent, text: "   \n ", targets: []), "",
+            "an empty selection copies nothing rather than an admission on its own")
+
+        // The row form is unchanged, including the headings case that cites nothing.
+        log.equal(
+            Citation.quotation(patent, rows: [DocumentRow(index: 0, kind: .heading("X"))]),
+            "X", "a heading-only selection still cites nothing")
     }
 
     // MARK: - Streaming
