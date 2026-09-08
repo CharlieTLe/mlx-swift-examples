@@ -47,8 +47,8 @@ struct LibraryView: View {
             // which removes it from the hierarchy along with its shortcut.
             //
             // **⌘F belongs to the document.** This field was the app's only find field and
-            // took the plain shortcut by default; now that `DocumentReaderView` can search
-            // the patent's own words, ⌘F means there what it means everywhere else — find in
+            // took the plain shortcut by default; now that `PatentPDFFind` can search the
+            // patent's own pages, ⌘F means there what it means everywhere else — find in
             // what I am reading — and filtering the library, which is a different question
             // about different things, takes the modified one.
             Button("Filter the library") { isQueryFocused = true }
@@ -218,9 +218,8 @@ struct LibraryView: View {
 
     /// The per-patent index state.
     ///
-    /// The same vocabulary `ReaderFontLibrary`'s download glyphs use, and for the same
-    /// reason: nothing at all in the ordinary case, a determinate figure while work is in
-    /// flight, and a warning triangle with the message in a tooltip when it failed. A
+    /// Nothing at all in the ordinary case, a determinate figure while work is in flight,
+    /// and a warning triangle with the message in a tooltip when it failed. A
     /// determinate figure rather than a spinner because this is the operation that takes
     /// tens of seconds, and a spinner over tens of seconds is indistinguishable from a
     /// hang.

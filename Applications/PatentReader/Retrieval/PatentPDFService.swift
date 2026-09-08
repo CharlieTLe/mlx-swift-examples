@@ -10,17 +10,17 @@ import Foundation
 /// PDF is missing is the only interesting thing about a missing PDF, and it is the part
 /// that would otherwise be written once in a view body and never checked again.
 ///
-/// **Both reader tabs are always present and always enabled**, whatever this says. A
-/// hidden or disabled segment states the fact and withholds the reason, and the pane's
-/// chrome would change shape as the reader clicks down the library — a control appearing
-/// and disappearing under the pointer. So an unavailable PDF is *reported*, in the same
-/// furniture as `ContentView.emptyState`, and every case below names both the problem and
-/// what to do about it.
+/// **An unavailable PDF is reported, never hidden.** There is no second view to fall back
+/// to any more, so a patent whose bytes cannot be had is a patent the reader cannot open —
+/// which makes saying *why*, and what to do about it, the entire value this type adds over
+/// an empty pane. Rendered in the same furniture as `ContentView.emptyState`, and every
+/// case below names both the problem and the remedy.
 enum PatentPDFAvailability: Equatable, Sendable {
     /// The library has the bytes. The reader's copy, not the reader's original: see
     /// `LibraryStore.storePDF(_:for:)`.
     case onDisk(URL)
-    /// Not fetched yet, and here is where it lives. The lazy trigger; see
+    /// Not fetched yet, and here is where it lives. Reachable in two ways: a library
+    /// imported before the download became eager, and a download that was cancelled. See
     /// `PatentPDFService.ensureDownloaded`.
     case downloadable(URL)
     /// A request is in flight to the named URL. Carries it so the pane can name the host
@@ -72,14 +72,16 @@ enum PatentPDFAvailability: Equatable, Sendable {
                     + "the link to the office's PDF was in it. Remove \(key.display) and "
                     + "fetch it again."
             case .noLinkInPage:
-                "The page this patent was parsed from carried no link to one. The reader "
-                    + "text is the whole of what was imported."
+                "The page this patent was parsed from carried no link to one, so there is "
+                    + "no document to open. Its text is still in the library: it is "
+                    + "searched, and every answer that cites it still says so."
             case .importedCopyGone:
                 "It was imported before the library kept a copy of the file, or the copy "
                     + "has since been deleted. Import the file again to read it here."
             case .notAPDFSource:
                 "A text file has no pages, no figures and no signature block, so there is "
-                    + "nothing here that the reader text does not already show."
+                    + "no document to open. Its text is still in the library: it is "
+                    + "searched, and every answer that cites it still says so."
             }
         }
     }
@@ -123,15 +125,25 @@ enum PatentPDFAvailability: Equatable, Sendable {
 
 /// The original PDF for each patent: where it is, and fetching it when it is not here yet.
 ///
-/// **Separate from `LibraryService`**, whose doc comment states exactly one idea — *a
-/// patent becomes readable before it becomes searchable* — and owns the order of
-/// operations that idea implies. A PDF fetched lazily, the first time somebody opens a
-/// tab, is not a step in that order and folding it in would make that sentence untrue.
+/// **Separate from `LibraryService`**, which owns the order in which a patent becomes
+/// parsed, readable and searchable. This owns *what the bytes are* — where they came from,
+/// whether they arrived, what to say when they cannot, and where every passage of the
+/// parsed text sits inside them.
 ///
-/// **Nothing here is eager.** `LibraryService.fetch` still makes exactly one request per
-/// patent; the second request happens when, and only when, a reader asks to see the
-/// original. A library of thirty patents is thirty PDFs nobody asked for, at a few
-/// megabytes each, from somebody else's bucket.
+/// **This file used to open by saying "Nothing here is eager", and it has to record why it
+/// inverted.** The argument was good while the PDF was a second tab: a library of thirty
+/// patents is thirty PDFs nobody asked for, at a few megabytes each, from somebody else's
+/// bucket, and only the tab the reader opened needed one. Then the PDF stopped being a
+/// second view of the patent and became *the* view of it, and lazy stopped meaning
+/// "downloaded when wanted" and started meaning "a row in the library that opens onto a
+/// spinner" — or, with the Wi-Fi off, onto nothing at all. `LibraryService.fetch` therefore
+/// awaits `ensureDownloaded` before it queues the patent for indexing, and a patent in the
+/// library is one you can read.
+///
+/// What stayed lazy is the retroactive path: `PatentPDFReaderView.task` still calls
+/// `ensureDownloaded`, which is how a library imported before the change gains its PDFs one
+/// at a time as the reader opens them. It is idempotent, so it costs nothing for everything
+/// imported since.
 @MainActor
 @Observable
 final class PatentPDFService {
@@ -240,15 +252,17 @@ final class PatentPDFService {
 
     /// Fetches the PDF if that is what this patent needs, and does nothing otherwise.
     ///
-    /// Called from `PatentPDFReaderView.task`, which means **the view existing is the
-    /// reader having opened the tab** — the trigger is structural rather than an event
-    /// that a new call site could forget to send.
+    /// Two callers, and the pair is the whole of the download policy. `LibraryService.fetch`
+    /// awaits this as a patent is imported, so a patent in the library is one that can be
+    /// read. `PatentPDFReaderView.task` calls it again when the reader opens a document,
+    /// which is the **retroactive** path: a library imported before that change gains its
+    /// PDFs one at a time, with no re-import.
     ///
-    /// Idempotent in both directions, which is the whole of its contract: a request
-    /// already in flight is not duplicated, a file already on disk is not re-fetched, and
-    /// **a failure is not retried**. That last one is deliberate and is the difference
-    /// between a reader with no network seeing one error and seeing the same error re-run
-    /// every time they touch the segmented control. Retrying is a button.
+    /// Idempotent in both directions, which is what lets there be two callers at all: a
+    /// request already in flight is not duplicated, a file already on disk is not
+    /// re-fetched, and **a failure is not retried**. That last one is deliberate and is the
+    /// difference between a reader with no network seeing one error and seeing the same
+    /// error re-run every time they click back to the patent. Retrying is a button.
     func ensureDownloaded(_ patent: Patent) async {
         guard case .downloadable(let url) = state(for: patent) else { return }
         await fetch(patent.key, from: url)
@@ -271,11 +285,11 @@ final class PatentPDFService {
             attempts[key] = nil
         } catch {
             // **A cancellation is not a failure.** This runs inside the view's `.task`, so
-            // leaving the tab or clicking the next patent mid-download cancels it — and
+            // clicking the next patent mid-download cancels it — and
             // recording that as a failure would make it *stick*, since a failure is never
             // retried on its own. The reader would come back to "The download failed. The
             // operation couldn't be completed" for a download nobody had a problem with.
-            // Cleared instead, so returning to the tab simply asks again.
+            // Cleared instead, so coming back to the patent simply asks again.
             // `LibraryService.build` treats a cancelled index the same way.
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 attempts[key] = nil

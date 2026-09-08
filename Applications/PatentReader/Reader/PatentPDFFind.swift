@@ -48,9 +48,9 @@ final class PatentPDFFind {
 
     /// Bumped every time the cursor lands somewhere, so the view knows to scroll.
     ///
-    /// A counter and not the match, for the reason `DocumentReaderView.scroll(to:)` gives
-    /// about writing a row index: two hits in the same place would be "no change" and the
-    /// second ⌘G would silently not scroll.
+    /// A counter and not the match: two hits in the same place would be "no change" and
+    /// the second ⌘G would silently not scroll. That is not a corner case — it is a reader
+    /// who panned away by hand looking at a highlight they cannot find.
     private(set) var step = 0
 
     /// The page each match is on, for `PassagePlacement.index(nearest:in:)`.
@@ -92,8 +92,8 @@ final class PatentPDFFind {
     ///
     /// Two colours because "the document contains this word 47 times" and "you are looking
     /// at the third one" are two different facts and the reader needs both at once. The
-    /// values are `DocumentRowView`'s, carried over so the two readers looked the same on
-    /// the day one replaced the other.
+    /// values are the deleted row reader's, carried over so that find looked the same on
+    /// the day one reader replaced the other.
     var highlighted: [PDFSelection] {
         for (offset, match) in matches.enumerated() {
             match.color = offset == cursor ? Self.currentHit : Self.hit

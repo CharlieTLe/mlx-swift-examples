@@ -5,11 +5,16 @@ import Foundation
 /// Importing patents and keeping their indexes current.
 ///
 /// The one place that owns the order of operations, and the order is the interesting
-/// part: **a patent becomes readable before it becomes searchable.** Parsing takes
-/// milliseconds and indexing takes tens of seconds, so the document is written and
-/// listed first and the embedding runs behind it. A reader who has just typed a number
-/// gets a patent to read immediately and a progress figure for the part that is slow,
-/// rather than a spinner over an empty library.
+/// part. It used to be two stages — **a patent becomes readable before it becomes
+/// searchable** — and it is now three, because what "readable" means changed underneath
+/// it: the reader shows the office's own PDF, and a patent whose bytes have not arrived
+/// is a patent nobody can read at all.
+///
+/// So: **parsed, then readable, then searchable.** Parsing takes milliseconds and produces
+/// the record, the title and the library row. The PDF is a second request, awaited, and
+/// costs a few seconds of somebody else's bandwidth. Indexing takes tens of seconds and
+/// runs behind both, so a reader who has just typed a number gets a document to read while
+/// the embedder works.
 @MainActor
 @Observable
 final class LibraryService {
@@ -36,7 +41,8 @@ final class LibraryService {
     let index: PatentIndex
     let embedder: EmbeddingService
     /// The original PDFs. Owned here because this type owns the store, and separate from
-    /// it because a lazy fetch is not a step in the order above — see `PatentPDFService`.
+    /// it because a `PDFDocument` and a page cache are not what an importer deals in — see
+    /// `PatentPDFService`.
     let pdf: PatentPDFService
 
     private(set) var indexStates: [PatentKey: IndexState] = [:]
@@ -106,6 +112,16 @@ final class LibraryService {
                 patent = try await source.fetch(key)
             }
             try store.store(patent, sourceHTML: html)
+            // **The PDF, awaited, before the patent is queued for indexing.** It is what
+            // the reader reads, so a patent in the library that has not got one is a row
+            // that opens onto a spinner — and, offline, onto a spinner that never resolves.
+            // Two requests instead of one, at the moment the reader asked for the patent
+            // and is already waiting, rather than a few megabytes fetched later behind a
+            // tab switch.
+            //
+            // Before `enqueue` rather than after, because indexing holds the GPU for tens
+            // of seconds and there is no reason for a download to queue behind it.
+            await pdf.ensureDownloaded(patent)
             enqueue(patent.key)
         } catch {
             importError = error.localizedDescription

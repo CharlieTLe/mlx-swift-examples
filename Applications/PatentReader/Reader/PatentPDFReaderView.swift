@@ -3,13 +3,18 @@
 import PDFKit
 import SwiftUI
 
-/// The document as the office published it, beside the parsed text.
+/// The patent, as the office published it. The only reader there is.
 ///
-/// The reader text is this app's whole argument — rows, paragraph numbers, a claim tree,
-/// citation chips that land on a passage — and it is a *reading* of the document. This tab
-/// is the document. A figure, a table, a chemical structure, a signature block and the
-/// typesetting of the printed grant are all things the parse cannot carry, and "is `[0042]`
-/// really `[0042]`?" is a question only the original answers.
+/// There was a second one until recently: a list of parsed rows with paragraph numbers in
+/// the margin and a claim tree. The parse is still here and still does everything it ever
+/// did — it builds the index, fills the prompt, and names every citation — but it was
+/// always a *reading* of the document, and this is the document. A figure, a table, a
+/// chemical structure, a signature block and the typesetting of the printed grant are all
+/// things the parse cannot carry, and "is `[0042]` really `[0042]`?" is a question only the
+/// original answers.
+///
+/// The one thing the parsed view could do that this could not was land a citation on a
+/// passage, and that turned out to be false: see `PassageAnchor` and `PatentPDFMap`.
 ///
 /// **What the reader's keys do here, and why each one was decided rather than inherited.**
 ///
@@ -168,11 +173,10 @@ struct PatentPDFReaderView: View {
                 report("doc.richtext", reason.headline, reason.detail(for: patent.key))
             }
         }
-        // **The view existing is the reader having opened the tab.** The lazy fetch is
-        // therefore structural rather than an event some future call site could forget to
-        // send — and `id:` re-runs it when the reader clicks down the library with this
-        // tab up. `ensureDownloaded` is idempotent and does not retry a failure, so the
-        // switching back and forth this invites costs nothing.
+        // **The view existing is the reader having opened the patent.** `id:` re-runs the
+        // whole sequence as they click down the library. `ensureDownloaded` is idempotent
+        // and does not retry a failure, so clicking back and forth costs nothing — and for
+        // everything imported since the download became eager it is already a no-op.
         .task(id: patent.key) { await open() }
         .task(id: bandRequest) { await raiseBand() }
         .onChange(of: findRequest) { startFinding() }
@@ -468,8 +472,8 @@ struct PatentPDFReaderView: View {
 /// where AppKit and UIKit genuinely differ" so that everything else can be platform-free,
 /// and every entry in it is a one-line shim over a single API. This is a feature's entire
 /// view layer that happens to need two protocol names, and filing it there would make
-/// `PlatformCompat.swift` the home of the PDF tab. `DocumentReaderView` is the model
-/// instead: keep the `#if`s at the smallest scope, in the feature's own file.
+/// `PlatformCompat.swift` the home of the reader. Keep the `#if`s at the smallest scope, in
+/// the feature's own file.
 ///
 /// The document arrives already open, from `PatentPDFReaderView` — see the note on its
 /// `document` property for why it is not made here. It is still made with `PDFDocument(url:)`

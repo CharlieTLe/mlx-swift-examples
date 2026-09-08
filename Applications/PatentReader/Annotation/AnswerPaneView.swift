@@ -424,10 +424,9 @@ struct AnswerPaneView: View {
                     .submitLabel(.send)
                 #else
                     // Esc belongs to the field while it holds the keyboard: it abandons
-                    // the draft. It does not reach `DocumentReaderView.onExitCommand`,
-                    // which would clear the selection the draft was written against — the
-                    // pane is that view's sibling, not its descendant, and commands only
-                    // travel to ancestors.
+                    // the draft. It does not reach the reader's own Esc ladder, which would
+                    // clear the selection the draft was written against — the pane is that
+                    // view's sibling, not its descendant.
                     .onExitCommand {
                         draft = ""
                         isDraftFocused = false
