@@ -12,19 +12,13 @@ struct ContentView: View {
     @State private var library = LibraryService()
 
     @State private var openPatent: PatentKey?
-    /// Which of the two views of the open document is up. See `ReaderTab` at the foot of
-    /// this file, and `aimAtText()` for the one thing that moves it on the reader's behalf.
-    @State private var readerTab: ReaderTab = .text
-    @State private var selection: PassageSelection?
-    @State private var scrollTarget: Int?
-    @State private var flash: FlashHighlight?
 
     /// Which passage the reader was last sent to, and why.
     ///
-    /// The PDF's counterpart to `scrollTarget` and `flash` together: it is both the scroll
-    /// and the accent mark, because on the original those are one thing — a highlight the
-    /// view is scrolled to. Carries a fresh identity per jump so clicking the same chip
-    /// twice moves twice; see `PassageFocus`.
+    /// The whole of "where the reader is", where the deleted text reader needed three:
+    /// a selection to draw a band, a scroll target, and a flash. On the original those are
+    /// one thing — a highlight the view is scrolled to. Carries a fresh identity per jump so
+    /// clicking the same chip twice moves twice; see `PassageFocus`.
     @State private var focus: PassageFocus?
 
     /// Where the reader has been, so a citation jump can be undone. See
@@ -88,7 +82,6 @@ struct ContentView: View {
     private var showsDiagnostics: Bool { diagnosticsPreference || options.diagnostics }
 
     @State private var fonts = ReaderFontLibrary()
-    @State private var dictionaryAnchor = DictionaryAnchor()
 
     // MARK: - Answer state
 
@@ -147,7 +140,7 @@ struct ContentView: View {
                     let opening = ProgressStore.opening(
                         from: ProgressStore.progress(), in: library.patents)
                     openPatent = opening.patent
-                    selection = opening.selection
+                    focus = opening.focus.map { PassageFocus($0) }
                 }
                 await service.load()
             }
@@ -155,7 +148,7 @@ struct ContentView: View {
                 recordProgress()
                 if let openPatent { outline = .following(openPatent) }
             }
-            .onChange(of: selection) { recordProgress() }
+            .onChange(of: focus) { recordProgress() }
             // Every `patentreader://` URL in the answer pane and in the document text
             // lands here. `Text` will not host a `Button`, so a tappable run inside
             // flowing prose has to be a link — and `.handled` is what keeps the link from
@@ -310,8 +303,6 @@ struct ContentView: View {
         openPatent.flatMap { library.store.patent($0) }
     }
 
-    private var rows: [DocumentRow] { patent?.rows ?? [] }
-
     /// What the open document should have painted on it: the passages retrieval put in the
     /// prompt, the ones the answer cited, and the one the reader was last sent to.
     ///
@@ -345,96 +336,29 @@ struct ContentView: View {
             onLocate: { locate($0) })
     }
 
+    /// The reader: the document as the office published it, and nothing else.
+    ///
+    /// There used to be two, behind a segmented control — a list of parsed rows, and this.
+    /// The parsed text was always a *means*: it is how the app builds an index, fills a
+    /// prompt and names a citation, and it still does all three. What it was not was the
+    /// thing a patent reader wants in front of them, which is the figures, the tables, the
+    /// chemical structures, the real typesetting, and the ability to check that `[0042]` is
+    /// `[0042]`.
+    ///
+    /// The one thing the tab bar bought — a citation landing on a passage — is now
+    /// `PassageAnchor` and `PatentPDFMap`'s, and the measurements are in their headers.
     @ViewBuilder
     private func readerPane() -> some View {
-        Group {
-            if let patent {
-                VStack(spacing: 0) {
-                    readerTabBar
-                    Divider()
-
-                    // **A `switch`, not a `ZStack` of two views one of which is
-                    // transparent.** Only one reader is ever in the hierarchy, and that is
-                    // what makes the keyboard question answer itself: `DocumentReaderView`
-                    // carries ⌘F, ⌘G, ⇧⌘C, `.focusable()`, `.onMoveCommand`,
-                    // `.onExitCommand` and `.onCopyCommand`, and all of them leave with
-                    // the view, so there are never two handlers for one key. A
-                    // zero-opacity `ZStack` — which is exactly the trick this app uses for
-                    // hidden shortcuts — would keep both live, and would hold a
-                    // several-hundred-row `LazyVStack` and a `PDFDocument` resident at
-                    // once.
-                    //
-                    // It costs two things, both accepted: coming back from the PDF rebuilds
-                    // `DocumentReaderView` with fresh state, so the find bar and its query
-                    // do not survive the trip, and a hand-panned scroll position is lost —
-                    // `.onAppear` puts `selection?.head` back, so a reader with a row
-                    // selected lands on it and one who scrolled by hand lands at the top.
-                    switch readerTab {
-                    case .text:
-                        DocumentReaderView(
-                            patent: patent,
-                            rows: rows,
-                            selection: $selection,
-                            flash: flash,
-                            scrollTarget: $scrollTarget,
-                            onCancel: { cancel() },
-                            onOpen: { jump(to: $0) },
-                            onLookUpWord: { term, point in
-                                dictionaryAnchor.showDefinition(term, at: point)
-                            },
-                            findRequest: findRequest
-                        )
-                    case .original:
-                        PatentPDFReaderView(
-                            patent: patent, pdf: library.pdf, plan: highlightPlan,
-                            findRequest: findRequest,
-                            copyRequest: copyRequest,
-                            onSelection: { hasOriginalSelection = $0 },
-                            onCancel: { cancel() })
-                    }
-                }
-            } else {
-                emptyState
-            }
+        if let patent {
+            PatentPDFReaderView(
+                patent: patent, pdf: library.pdf, plan: highlightPlan,
+                findRequest: findRequest,
+                copyRequest: copyRequest,
+                onSelection: { hasOriginalSelection = $0 },
+                onCancel: { cancel() })
+        } else {
+            emptyState
         }
-        .environment(
-            \.readerTypeface,
-            fonts.typeface(
-                for: readerFont, textSize: readerTextSize,
-                dynamicTypeSize: dynamicTypeSize)
-        )
-        // The dictionary panel needs an `NSView` to be popped over and a point to be
-        // popped at, and this is both: the anchor fills the reader pane, so the space
-        // registered here *is* the anchor's own coordinate system.
-        .coordinateSpace(name: DictionaryAnchor.space)
-        .background { DictionaryAnchorView(anchor: dictionaryAnchor) }
-    }
-
-    /// **Reader text / Original PDF**, in a bar of its own above the reader.
-    ///
-    /// Not in the macOS `header` and not a toolbar item. The header is window chrome that
-    /// outlives the document — the library toggle, back and forward, the answers toggle —
-    /// and a control naming two views of *this* patent belongs to the patent. It is also
-    /// the only placement with no `#if`: a toolbar item would need one implementation per
-    /// platform in a file whose `layout` comment says what differs between them is the
-    /// container and nothing else.
-    ///
-    /// Inside `if let patent`, so with nothing open there is no bar — there would be
-    /// nothing to switch between. `.fixedSize()` keeps a segmented control from stretching
-    /// to a 680pt reader pane.
-    @ViewBuilder
-    private var readerTabBar: some View {
-        Picker("View", selection: $readerTab) {
-            ForEach(ReaderTab.allCases, id: \.self) { tab in
-                Text(tab.title).tag(tab)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity)
-        .accessibilityLabel("Which view of this patent")
     }
 
     @ViewBuilder
@@ -558,10 +482,16 @@ struct ContentView: View {
                 Button("Find in this patent", systemImage: "text.magnifyingglass") {
                     findRequest += 1
                 }
-                Button("Copy passage", systemImage: "doc.on.doc") { copySelection() }
-                    .disabled(!canCopySelection)
-                Button("Clear selection", systemImage: "xmark") { selection = nil }
-                    .disabled(selection == nil || readerTab != .text)
+                // ⇧⌘C is not a key a phone has either. The row is disabled rather than
+                // hidden, because "copy the passage" is worth teaching even when there is
+                // nothing selected yet.
+                //
+                // There is no **Clear selection** row beside it any more, and its going is
+                // a small gain rather than a loss: the row band it used to dismiss had no
+                // other way out, where PDFKit's own selection is cleared by tapping the
+                // page — the system's gesture, which a reader already knows.
+                Button("Copy passage", systemImage: "doc.on.doc") { copyRequest += 1 }
+                    .disabled(!hasOriginalSelection)
                 Divider()
                 Toggle("Show diagnostics", isOn: $diagnosticsPreference)
             } label: {
@@ -569,25 +499,6 @@ struct ContentView: View {
             }
             .borderlessMenu()
             .accessibilityLabel("More")
-        }
-
-        /// Whether there is anything for the copy row to copy, on whichever reader is up.
-        private var canCopySelection: Bool {
-            readerTab == .text ? selection != nil : hasOriginalSelection
-        }
-
-        /// ⌘C's counterpart. Neither reader can own this: the menu is in the navigation bar,
-        /// which is this view's. The PDF's half is a request rather than a call, because the
-        /// selection it copies is a live `PDFSelection` that never leaves the view layer.
-        private func copySelection() {
-            guard readerTab == .text else {
-                copyRequest += 1
-                return
-            }
-            guard let patent, let selection,
-                let range = selection.clamped(to: rows)?.range
-            else { return }
-            copyToPasteboard(Citation.quotation(patent, rows: Array(rows[range])))
         }
     #endif
 
@@ -989,10 +900,9 @@ struct ContentView: View {
         revealReader()
         guard key != openPatent else { return }
         if let current = openPatent {
-            history.push(NavigationHistory.Position(patent: current, row: selection?.head))
+            history.push(NavigationHistory.Position(patent: current, target: focus?.target))
         }
         openPatent = key
-        selection = nil
         focus = nil
     }
 
@@ -1008,60 +918,36 @@ struct ContentView: View {
         showsLibrary = false
     }
 
-    /// Puts the reader text up, because what is about to be aimed at is in it.
-    ///
-    /// **The app's central promise runs through here.** A paragraph number is a fact about
-    /// the parsed text; the PDF is paginated by the office's typesetting and carries no
-    /// index this app can resolve `[0042]` against. So "click a citation, land on the
-    /// paragraph" means landing in the *text*, and the tab has to move with the jump rather
-    /// than the jump quietly doing nothing behind a PDF.
-    ///
-    /// Called by `jump(to:)`, `showNumeral(_:)`, `scrollToSection(_:)` and `restore(_:)`,
-    /// which between them cover `locate`, `goBack` and `goForward` transitively.
-    ///
-    /// Deliberately **not** folded into `revealReader()`, which early-returns at a regular
-    /// width — that is every Mac and half the iPads, so the tab would move on a phone and
-    /// not on a desk.
-    private func aimAtText() {
-        readerTab = .text
-    }
-
     /// The jump. This is the function the whole app is for.
     ///
-    /// Five steps, and the order of the first two matters: switching documents clears the
-    /// selection, so the history push and the switch have to happen before anything is
-    /// aimed.
+    /// **It used to open by switching to the parsed text**, on the argument that a paragraph
+    /// number is a fact about the parse and the PDF carries no index to resolve `[0042]`
+    /// against. The first half is still true; the conclusion was wrong. A paragraph's own
+    /// first six words are that index, they are already in the parse, and
+    /// `PassageAnchors` → `PatentPDFMap` resolves 97% of them in about two milliseconds
+    /// each. So the jump lands on the office's own document, and the 3% that cannot be
+    /// landed on are reported in three places rather than hidden — see
+    /// `PatentPDFReaderView.raiseBand` and `unlocatable`.
+    ///
+    /// The order of the first two steps matters: switching documents clears the focus, so
+    /// the history push and the switch have to happen before anything is aimed.
     private func jump(to target: CitationTarget) {
-        aimAtText()
-        guard let destination = library.store.patent(target.patent) else { return }
+        guard library.store.patent(target.patent) != nil else { return }
 
         if target.patent != openPatent {
             if let current = openPatent {
                 history.push(
-                    NavigationHistory.Position(patent: current, row: selection?.head))
+                    NavigationHistory.Position(patent: current, target: focus?.target))
             }
             openPatent = target.patent
             revealReader()
-        } else if let current = openPatent, let head = selection?.head {
+        } else if let current = openPatent, let previous = focus?.target {
             // Same document: still worth recording, because a jump within a long patent
             // loses the reader's place exactly as a jump across one does.
-            history.push(NavigationHistory.Position(patent: current, row: head))
+            history.push(NavigationHistory.Position(patent: current, target: previous))
         }
 
         focus = PassageFocus(target)
-        guard let row = rowIndex(of: target, in: destination) else { return }
-        // Written directly rather than through `DocumentReaderView.select(_:)`. That
-        // function requests keyboard focus, which would take it from wherever the reader
-        // was typing — and, more to the point, a programmatic move must not be
-        // indistinguishable from a reader's own.
-        selection = PassageSelection(at: row)
-        scrollTarget = row
-        flash = FlashHighlight(row: row)
-    }
-
-    /// The row a citation names, in the document it names.
-    private func rowIndex(of target: CitationTarget, in patent: Patent) -> Int? {
-        patent.rows.first { $0.target(in: patent.key) == target }?.index
     }
 
     /// A `patentreader://` URL from an answer chip, a reference numeral, or a claim
@@ -1091,29 +977,28 @@ struct ContentView: View {
     /// "Introduced" is approximated by "first mentioned", and that is right far more often
     /// than not — a patent introduces a part where it first names it, because that is the
     /// drafting convention the numerals exist to serve.
+    ///
+    /// The search stays exactly what it was: a pure fact about the parsed text, over
+    /// `Patent.paragraphs`, deciding *which paragraph*. What is new is the second half —
+    /// the reader lands on the numeral rather than near it, because `PassageFocus.refinement`
+    /// narrows within that paragraph's own bracket of the document. Searching the PDF for
+    /// `130` directly would answer a different question: the numeral is in every figure
+    /// caption.
     private func showNumeral(_ numeral: Int) {
-        aimAtText()
         guard let patent else { return }
         let token = String(numeral)
         guard
-            let row = patent.rows.first(where: { row in
-                guard case .paragraph = row.kind else { return false }
-                return row.plainText.split(whereSeparator: { !$0.isNumber })
+            let paragraph = patent.paragraphs.first(where: { paragraph in
+                paragraph.text.split(whereSeparator: { !$0.isNumber })
                     .contains(Substring(token))
             })
         else { return }
-        if let current = openPatent, let head = selection?.head {
-            history.push(NavigationHistory.Position(patent: current, row: head))
+        if let current = openPatent, let previous = focus?.target {
+            history.push(NavigationHistory.Position(patent: current, target: previous))
         }
-        selection = PassageSelection(at: row.index)
-        scrollTarget = row.index
-        flash = FlashHighlight(row: row.index)
-        // The same paragraph, and then the numeral inside it. The search above stays exactly
-        // what it was — a pure fact about the parsed text — and the refinement only decides
-        // where in that paragraph the original scrolls to. See `PassageFocus.refinement`.
-        if let target = row.target(in: patent.key) {
-            focus = PassageFocus(target, refining: token)
-        }
+        focus = PassageFocus(
+            .paragraph(ParagraphKey(patent: patent.key, number: paragraph.number)),
+            refining: token)
     }
 
     /// `[0042]` or `claim 7` typed into the library's find field.
@@ -1127,37 +1012,23 @@ struct ContentView: View {
         }
     }
 
+    /// A section picked from the library's outline.
+    ///
+    /// **Aimed at the section's first passage**, not at its heading, and the swap is what
+    /// lets this work at all on the original: the PDF has no heading rows to scroll to, and
+    /// anchoring headings separately would be a second kind of anchor with its own failure
+    /// rate to measure. The heading is one line above the first paragraph, so the reader
+    /// lands with it on screen — and the paragraph inherits the monotonic placement the
+    /// whole document already computed.
     private func scrollToSection(_ index: Int) {
-        aimAtText()
-        guard let patent else { return }
-        let row: DocumentRow?
-        if index == LibraryOutline.claimsSection {
-            row = patent.rows.first { row in
-                if case .claimsHeading = row.kind { return true }
-                return false
-            }
-        } else {
-            guard patent.sections.indices.contains(index) else { return }
-            let heading = patent.sections[index].heading
-            row = patent.rows.first { row in
-                if case .heading(let text) = row.kind { return text == heading }
-                return false
-            }
-        }
-        guard let row else { return }
+        guard let patent, let target = firstPassage(ofSection: index, in: patent)
+        else { return }
         revealReader()
-        scrollTarget = row.index
-        // The original has no heading rows to scroll to, so a section is aimed at through
-        // its **first passage** — claim 1 for the Claims sentinel. The heading is one line
-        // above it, so the reader lands with it on screen, and the passage inherits the
-        // monotonic placement instead of needing a second, separately-bracketed kind of
-        // anchor whose failures would have their own rate to measure.
-        if let target = firstPassage(ofSection: index, in: patent) {
-            focus = PassageFocus(target)
-        }
+        focus = PassageFocus(target)
     }
 
-    /// The first thing under a heading that a citation could name.
+    /// The first thing under a heading that a citation could name. `claim 1` for the
+    /// outline's Claims sentinel.
     private func firstPassage(ofSection index: Int, in patent: Patent) -> CitationTarget? {
         if index == LibraryOutline.claimsSection {
             return patent.claims.first.map {
@@ -1172,34 +1043,21 @@ struct ContentView: View {
 
     private func goBack() {
         guard let current = openPatent else { return }
-        let now = NavigationHistory.Position(patent: current, row: selection?.head)
+        let now = NavigationHistory.Position(patent: current, target: focus?.target)
         guard let previous = history.goBack(from: now) else { return }
         restore(previous)
     }
 
     private func goForward() {
         guard let current = openPatent else { return }
-        let now = NavigationHistory.Position(patent: current, row: selection?.head)
+        let now = NavigationHistory.Position(patent: current, target: focus?.target)
         guard let next = history.goForward(from: now) else { return }
         restore(next)
     }
 
     private func restore(_ position: NavigationHistory.Position) {
-        aimAtText()
         openPatent = position.patent
-        selection = position.row.map(PassageSelection.init(at:))
-        scrollTarget = position.row
-        if let row = position.row { flash = FlashHighlight(row: row) }
-        // A row index, converted. `NavigationHistory.Position` still records where the
-        // reader was as a row because the text reader is still here to put them back on
-        // one; it becomes a `CitationTarget` outright when that goes.
-        focus =
-            position.row
-            .flatMap { row in
-                library.store.patent(position.patent)?.rows.first { $0.index == row }
-            }
-            .flatMap { $0.target(in: position.patent) }
-            .map { PassageFocus($0) }
+        focus = position.target.map { PassageFocus($0) }
     }
 
     private func recordProgress() {
@@ -1208,7 +1066,7 @@ struct ContentView: View {
             ReadingProgress(
                 schemaVersion: ProgressStore.schemaVersion,
                 patent: patent.key,
-                selection: selection,
+                focus: focus?.target,
                 stamp: patent.source.contentSHA256))
     }
 
@@ -1296,9 +1154,8 @@ struct ContentView: View {
         // than overlooked: `Retriever`'s scope is a `Set<PatentKey>`, and narrowing
         // retrieval to a span inside one document is a different feature with its own
         // ranking question.
-        let hasScope = selection != nil || (hasOriginalSelection && readerTab == .original)
         let scope: Set<PatentKey>? =
-            hasScope && openPatent != nil ? [openPatent!] : nil
+            hasOriginalSelection && openPatent != nil ? [openPatent!] : nil
 
         let started = Date()
         Task {
@@ -1403,27 +1260,5 @@ struct ContentView: View {
     private func cancel() {
         Task { await service.stopActiveWork() }
         clearAnswer()
-    }
-}
-
-/// The two views of one patent.
-///
-/// At file scope, as `FlashHighlight` sits at the foot of `DocumentReaderView.swift`: it is
-/// a small value the pane is built from rather than part of `ContentView`'s interface.
-///
-/// The division is worth stating because it is the thing a reader has to hold: everything
-/// the app *does* addresses the parsed text — a citation resolves to a row, ⌘F searches
-/// rows, ⇧⌘C quotes rows, a selection scopes a question to rows — and this tab is the
-/// document those rows are a reading of. So the PDF is PDFKit and nothing else: no find
-/// bar, no row selection, no citation chips drawn over it.
-enum ReaderTab: String, CaseIterable, Hashable, Sendable {
-    case text
-    case original
-
-    var title: String {
-        switch self {
-        case .text: "Reader text"
-        case .original: "Original PDF"
-        }
     }
 }

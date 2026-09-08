@@ -2,17 +2,17 @@
 
 import Foundation
 
-/// The document, flattened into the rows the reader draws and the selection addresses.
+/// The document, flattened into one addressable list.
 ///
-/// One list rather than a nested render, for `SceneReaderView`'s reason: the reader is a
-/// `LazyVStack` over an index range, drag selection maps a point to a row through
-/// `RowFrames`, and the scroll target of a citation jump is a row index. A tree would
-/// have to be flattened at each of those three places, and they would disagree.
+/// **This used to be what the reader drew**, a `LazyVStack` over an index range with drag
+/// selection hit-testing into it. That reader is gone and this is not, because the
+/// flattening is useful on its own: it is document order with a citation attached to each
+/// entry, which is exactly what `PassageAnchors` walks and what `Headless`'s
+/// `--patent --paragraph` resolves against.
 ///
-/// A claim is **one row including its elements**, not one row per element. The unit a
-/// reader selects and the unit a citation names have to be the same thing — `claim 7` is
-/// one citation — and splitting a claim into rows would make ⌘C on "claim 7" produce
-/// half of it. `ClaimRowView` draws the hanging indent inside the row instead.
+/// A claim is **one row including its elements**, not one row per element, which is the one
+/// shaping decision worth keeping stated: `claim 7` is one citation, so the unit that has a
+/// target has to be the whole claim.
 struct DocumentRow: Identifiable, Hashable, Sendable {
     enum Kind: Hashable, Sendable {
         /// A `<heading>` from the specification.
@@ -40,8 +40,8 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// The row's text with nothing of the reader's chrome in it — no gutter number, no
-    /// claim badge — which is what ⌘C copies and what the retrieval index embeds.
+    /// The row's text with nothing of a reader's chrome in it — no gutter number, no
+    /// claim badge.
     var plainText: String {
         switch kind {
         case .heading(let text), .claimsHeading(let text): text
@@ -50,28 +50,6 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
         }
     }
 
-    var isHeading: Bool {
-        switch kind {
-        case .heading, .claimsHeading: true
-        case .paragraph, .claim: false
-        }
-    }
-
-    /// How deep the claim tree indents this row. Zero for everything that is not a
-    /// dependent claim, and computed once when the rows are built rather than during
-    /// layout — `DocumentRowView`'s size-neutrality contract means layout may not walk a
-    /// graph, and the depth of claim 12 is a walk up its parents.
-    var claimDepth: Int = 0
-
-    static func == (lhs: DocumentRow, rhs: DocumentRow) -> Bool {
-        lhs.index == rhs.index && lhs.kind == rhs.kind && lhs.claimDepth == rhs.claimDepth
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(index)
-        hasher.combine(kind)
-        hasher.combine(claimDepth)
-    }
 }
 
 extension DocumentRow {
@@ -96,12 +74,12 @@ extension Patent {
     /// The whole document as rows, in reading order: the specification section by
     /// section, then the claims.
     ///
-    /// Claims last, which is the reverse of how a granted patent is printed — the claims
-    /// come first in the official document — and deliberate. A reader arriving at a
-    /// patent through a question wants the passage the answer cited, and the answer
-    /// cites specification paragraphs far more often than claims; putting twenty claims
-    /// above `[0001]` would make every such landing a scroll. The navigator's Claims
-    /// section is one tap either way.
+    /// Claims last, which is the reverse of how a granted patent is printed. It no longer
+    /// decides what anybody scrolls past — the original is paginated by the office and this
+    /// list draws nothing — but it still decides the order `PassageAnchors` emits, and that
+    /// order has to match the document's or `PassagePlacement.monotonic` places almost
+    /// nothing. **A US grant prints its claims at the end**, after the description, which is
+    /// what this matches.
     var rows: [DocumentRow] {
         var rows: [DocumentRow] = []
 
@@ -116,13 +94,8 @@ extension Patent {
 
         guard !claims.isEmpty else { return rows }
         rows.append(DocumentRow(index: rows.count, kind: .claimsHeading("Claims")))
-
-        let depths = claimDepths()
         for claim in claims {
-            rows.append(
-                DocumentRow(
-                    index: rows.count, kind: .claim(claim),
-                    claimDepth: depths[claim.number] ?? 0))
+            rows.append(DocumentRow(index: rows.count, kind: .claim(claim)))
         }
         return rows
     }

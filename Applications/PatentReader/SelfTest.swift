@@ -58,15 +58,12 @@ enum SelfTest {
         passagePlacement(log)
         highlightPlan(log)
         passageLookup(log)
-        documentFind(log)
         quoteCheck(log)
-        selection(log)
         followUpParsing(log)
         goldenPromptRender(log)
         readerFonts(log)
         readerTextSizes(log)
         readingProgress(log)
-        wordTokenizer(log)
 
         if log.failures.isEmpty {
             print("selftest: all checks passed")
@@ -557,11 +554,6 @@ enum SelfTest {
         log.equal(
             Citation.quotation(patent, text: "   \n ", targets: []), "",
             "an empty selection copies nothing rather than an admission on its own")
-
-        // The row form is unchanged, including the headings case that cites nothing.
-        log.equal(
-            Citation.quotation(patent, rows: [DocumentRow(index: 0, kind: .heading("X"))]),
-            "X", "a heading-only selection still cites nothing")
     }
 
     // MARK: - Streaming
@@ -1910,273 +1902,6 @@ enum SelfTest {
             "a break before a capital does not rejoin")
     }
 
-    // MARK: - Find in the document
-
-    /// The reader's find field: the offsets, the order, the wrap, and the claim clipping.
-    ///
-    /// **The offsets are the reason this suite exists.** Everything else here would fail
-    /// visibly — a wrong count is on screen, a broken wrap goes nowhere — but a match
-    /// addressed one character to the left just draws a highlight that looks slightly off,
-    /// which is the kind of wrong that ships. So every match found in the real fixture is
-    /// checked by going back to the row's text and reading what the offsets actually
-    /// address.
-    private static func documentFind(_ log: Log) {
-        guard let patent = parsed("US10123456B2") else {
-            log.fail("could not load US10123456B2 for the document-find checks")
-            return
-        }
-        let rows = patent.rows
-        let text = Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0.plainText) })
-
-        /// What a match's offsets actually address, or `nil` if they address nothing.
-        func addressed(_ match: DocumentFind.Match) -> String? {
-            guard let row = text[match.row] else { return nil }
-            let count = row.utf16.count
-            guard match.range.lowerBound >= 0, match.range.lowerBound < match.range.upperBound,
-                match.range.upperBound <= count
-            else { return nil }
-            let lower = String.Index(utf16Offset: match.range.lowerBound, in: row)
-            let upper = String.Index(utf16Offset: match.range.upperBound, in: row)
-            return String(row[lower ..< upper])
-        }
-
-        // Below the minimum nothing runs, and the field reports *nothing* rather than "no
-        // matches" — the reader is still typing and has not failed at anything yet.
-        var find = DocumentFind()
-        find.search("s", in: rows, near: nil)
-        log.check(find.matches.isEmpty, "a one-character query should not run")
-        log.check(find.summary == nil, "a query too short to run should report nothing")
-        log.check(!find.isActive, "a one-character query should not read as active")
-
-        // A real term from the fixture, checked against the text it claims to address.
-        find.search("matrix", in: rows, near: nil)
-        log.check(!find.matches.isEmpty, "\"matrix\" should occur in US10123456B2")
-        log.equal(
-            find.matches.compactMap { addressed($0)?.lowercased() }.filter { $0 != "matrix" },
-            [], "every match should address exactly the query")
-        log.equal(
-            find.matches.filter { addressed($0) == nil }.count, 0,
-            "no match should address a range outside its row")
-        log.equal(find.summary, "1 of \(find.matches.count)", "the opening summary")
-
-        // Reading order, and no overlaps: rows never go backwards, and within a row each
-        // hit starts at or after the end of the one before it.
-        var ordered = true
-        for (previous, next) in zip(find.matches, find.matches.dropFirst()) {
-            if next.row < previous.row { ordered = false }
-            if next.row == previous.row, next.range.lowerBound < previous.range.upperBound {
-                ordered = false
-            }
-        }
-        log.check(ordered, "matches should be in reading order and should not overlap")
-
-        // Case insensitivity, from a query nobody would type the same way twice.
-        var upper = DocumentFind()
-        upper.search("MATRIX", in: rows, near: nil)
-        log.equal(
-            upper.matches, find.matches, "matching should be case-insensitive")
-
-        // The wrap, in both directions. Running off the end of a document is not an error.
-        let total = find.matches.count
-        guard total > 1 else {
-            log.fail("the fixture needs more than one \"matrix\" for the wrap checks")
-            return
-        }
-        log.equal(find.cursor, 0, "a fresh search should start at the first match")
-        log.equal(find.advance(by: -1)?.row, find.matches[total - 1].row, "wrapping backwards")
-        log.equal(find.cursor, total - 1, "the cursor after wrapping backwards")
-        log.equal(find.advance(by: 1)?.row, find.matches[0].row, "wrapping forwards")
-        log.equal(find.summary, "1 of \(total)", "the summary after wrapping forwards")
-
-        // The reading position, which is what stops ⌘F from throwing the reader back to
-        // `[0001]`: the cursor lands on the first hit at or after the row they are on. The
-        // *first* in that row matters and is why this is asserted by row — the row a reader
-        // is on often contains several hits, and landing on the last of them would skip the
-        // ones above it.
-        let last = find.matches[total - 1].row
-        var nearEnd = DocumentFind()
-        nearEnd.search("matrix", in: rows, near: last)
-        log.equal(nearEnd.current?.row, last, "a search should start at the reader's row")
-        log.equal(
-            nearEnd.cursor, find.matches.firstIndex { $0.row == last },
-            "a search should start at the first hit in that row, not a later one in it")
-        var pastEnd = DocumentFind()
-        pastEnd.search("matrix", in: rows, near: rows.count)
-        log.equal(pastEnd.cursor, 0, "a position past the last match should wrap to the first")
-
-        // Clearing takes the highlights with it.
-        find.clear()
-        log.check(find.matches.isEmpty, "clearing should drop the matches")
-        log.check(
-            find.highlights(in: find.matches.first?.row ?? 0).isEmpty,
-            "clearing should drop the highlights")
-
-        // Diacritics and apostrophes, which is the case `LibrarySearch.fold` handles by
-        // rewriting the string and this one cannot: the offsets have to keep addressing the
-        // original. `L'Oréal` before the hit is what would shift a folded answer.
-        let accented = [
-            DocumentRow(
-                index: 0,
-                kind: .paragraph(
-                    Paragraph(
-                        index: 0, number: 1,
-                        text: "L'Oréal's café process forms a Nestlé wrapper.",
-                        hasPrintedNumber: true)))
-        ]
-        var folded = DocumentFind()
-        folded.search("nestle", in: accented, near: nil)
-        log.equal(folded.matches.count, 1, "a diacritic should not defeat a match")
-        log.equal(
-            folded.matches.first.flatMap { match -> String? in
-                let row = accented[0].plainText
-                let lower = String.Index(utf16Offset: match.range.lowerBound, in: row)
-                let upper = String.Index(utf16Offset: match.range.upperBound, in: row)
-                return String(row[lower ..< upper])
-            },
-            "Nestlé",
-            "an accented match should address the accented text, not a folded copy")
-
-        // A claim is one row and three drawn pieces, so a highlight has to be cut to the
-        // piece and rebased onto it. The element hit is the one that matters: it is where
-        // most of a claim's words are.
-        let claim = Claim(
-            number: 1, text: "A method comprising:",
-            elements: [
-                ClaimElement(depth: 0, text: "heating a substrate;"),
-                ClaimElement(depth: 0, text: "cooling the substrate."),
-            ],
-            dependsOn: [], dependencySource: .none)
-        let claimRows = [DocumentRow(index: 0, kind: .claim(claim))]
-        var inClaim = DocumentFind()
-        inClaim.search("substrate", in: claimRows, near: nil)
-        log.equal(inClaim.matches.count, 2, "both elements should be searched")
-
-        let highlights = inClaim.highlights(in: 0)
-        let preamble = 0 ..< claim.text.utf16.count
-        log.check(
-            highlights.clipped(to: preamble).isEmpty,
-            "a hit in an element should not be drawn in the preamble")
-
-        let firstElement = claim.text.utf16.count + 1
-        let firstLength = claim.elements[0].text.utf16.count
-        let clipped = highlights.clipped(to: firstElement ..< firstElement + firstLength)
-        log.equal(clipped.ranges.count, 1, "the first element should get exactly its own hit")
-        log.equal(
-            clipped.ranges.first.map { range -> String in
-                let element = claim.elements[0].text
-                let lower = String.Index(utf16Offset: range.lowerBound, in: element)
-                let upper = String.Index(utf16Offset: range.upperBound, in: element)
-                return String(element[lower ..< upper])
-            },
-            "substrate",
-            "a clipped highlight should be rebased onto the piece it is drawn in")
-        log.equal(
-            clipped.current, clipped.ranges.first,
-            "the current match should survive being clipped to its own piece")
-
-        // The preamble half of the same split, from a query that is only in the preamble.
-        var inPreamble = DocumentFind()
-        inPreamble.search("comprising", in: claimRows, near: nil)
-        log.equal(
-            inPreamble.highlights(in: 0).clipped(to: preamble).ranges.count, 1,
-            "a hit in the preamble should be drawn in the preamble")
-    }
-
-    // MARK: - Selection
-
-    private static func selection(_ log: Log) {
-        guard let patent = parsed("US10123456B2") else {
-            log.fail("could not load US10123456B2 for the selection checks")
-            return
-        }
-        let rows = patent.rows
-
-        // Range normalizes regardless of drag direction.
-        log.equal(PassageSelection(anchor: 4, head: 1).range, 1 ... 4, "a backwards range")
-        log.equal(PassageSelection(anchor: 1, head: 4).range, 1 ... 4, "a forwards range")
-        log.equal(PassageSelection(at: 2).count, 1, "a single-row selection")
-
-        // Shift-click backwards through the anchor keeps the anchor.
-        var backwards = PassageSelection(at: 4)
-        backwards.extend(to: 1)
-        log.equal(backwards.anchor, 4, "the anchor after extending backwards")
-        log.equal(backwards.range, 1 ... 4, "the range after extending backwards")
-
-        // Drag reversal: past the anchor and back again.
-        var reversed = PassageSelection(at: 2)
-        reversed.extend(to: 5)
-        reversed.extend(to: 1)
-        log.equal(reversed.range, 1 ... 2, "the range after a drag reverses")
-
-        // Double-clicking a heading takes its whole section, which is how a reader scopes
-        // a question to the Background.
-        guard let heading = rows.firstIndex(where: { $0.isHeading }) else {
-            log.fail("the fixture has no heading row")
-            return
-        }
-        let section = PassageSelection.unit(at: heading, in: rows)
-        log.equal(section.range.lowerBound, heading, "a section selection starts at its heading")
-        log.check(
-            section.range.upperBound > heading,
-            "a section selection should include the rows under the heading")
-        log.check(
-            rows[(heading + 1) ... section.range.upperBound].allSatisfy { !$0.isHeading },
-            "a section selection ran into the next section")
-
-        // Double-clicking anything else takes just it: a paragraph and a claim are each
-        // already the whole thing they are.
-        guard let paragraph = rows.firstIndex(where: { !$0.isHeading }) else { return }
-        log.equal(
-            PassageSelection.unit(at: paragraph, in: rows).range, paragraph ... paragraph,
-            "a paragraph selects alone")
-
-        // Clamping at the document's edges.
-        log.equal(
-            PassageSelection(anchor: -4, head: 99_999).clamped(to: rows)?.range,
-            0 ... (rows.count - 1), "clamping past both edges")
-        log.check(
-            PassageSelection(at: 0).clamped(to: [])?.range == nil,
-            "clamping into an empty document should yield nil")
-        log.equal(
-            PassageSelection.unit(at: 99_999, in: rows).range, 99_999 ... 99_999,
-            "a double-click on an out-of-range index")
-
-        // Arrow moves. Nothing selected *lands* rather than steps, whichever way it was
-        // pressed.
-        func moved(_ from: PassageSelection?, _ step: Int, extending: Bool = false)
-            -> PassageSelection?
-        {
-            PassageSelection.moved(from: from, by: step, extending: extending, in: rows)
-        }
-
-        log.equal(moved(nil, 1), PassageSelection(at: 0), "the first press down")
-        log.equal(moved(nil, -1), PassageSelection(at: 0), "the first press up")
-        log.equal(moved(PassageSelection(at: 2), 1), PassageSelection(at: 3), "stepping down")
-        log.equal(moved(PassageSelection(at: 2), -1), PassageSelection(at: 1), "stepping up")
-
-        // A collapsed selection moves as a whole rather than shrinking.
-        log.equal(
-            moved(PassageSelection(anchor: 1, head: 4), 1), PassageSelection(at: 5),
-            "an unshifted step out of a range")
-
-        // Off the edge with nothing to extend. Unlike a play, this does nothing rather
-        // than rolling: a library is not a sequence.
-        log.equal(moved(PassageSelection(at: rows.count - 1), 1), nil, "down at the last row")
-        log.equal(moved(PassageSelection(at: 0), -1), nil, "up at row 0")
-
-        // Extending stops at the edge.
-        log.equal(
-            moved(PassageSelection(at: rows.count - 1), 1, extending: true),
-            PassageSelection(at: rows.count - 1), "shift-down at the last row")
-        log.equal(
-            moved(PassageSelection(anchor: 4, head: 3), -1, extending: true),
-            PassageSelection(anchor: 4, head: 2),
-            "shift-up back through the anchor keeps it")
-        log.equal(
-            PassageSelection.moved(from: nil, by: 1, extending: false, in: []), nil,
-            "an arrow move in an empty document")
-    }
-
     // MARK: - Quotations and follow-ups
 
     /// The quote check, ported and still earning its place.
@@ -2547,10 +2272,10 @@ enum SelfTest {
         }
         let library = [patent, other]
 
-        let selection = PassageSelection(anchor: 12, head: 20)
+        let focus = CitationTarget.paragraph(ParagraphKey(patent: patent.key, number: 12))
         let record = ReadingProgress(
             schemaVersion: ProgressStore.schemaVersion, patent: patent.key,
-            selection: selection, stamp: patent.source.contentSHA256)
+            focus: focus, stamp: patent.source.contentSHA256)
 
         guard let data = try? JSONEncoder().encode(record),
             let back = try? JSONDecoder().decode(ReadingProgress.self, from: data)
@@ -2558,17 +2283,17 @@ enum SelfTest {
             log.fail("a record did not round-trip through JSON")
             return
         }
-        log.equal(back, record, "a record carrying a selection")
+        log.equal(back, record, "a record carrying a position")
 
-        // A cold start: the first patent, nothing selected.
+        // A cold start: the first patent, nothing focused.
         let cold = ProgressStore.opening(from: nil, in: library)
         log.equal(cold.patent, library.first?.key, "the opening with no stored record")
-        log.check(cold.selection == nil, "a cold start should select nothing")
+        log.check(cold.focus == nil, "a cold start should focus nothing")
 
         // The ordinary case.
         let restored = ProgressStore.opening(from: record, in: library)
         log.equal(restored.patent, patent.key, "the restored patent")
-        log.equal(restored.selection, selection, "the restored selection")
+        log.equal(restored.focus, focus, "the restored position")
 
         // A patent that is no longer in the library, which would otherwise leave the
         // reader on an empty pane forever.
@@ -2578,31 +2303,48 @@ enum SelfTest {
             ProgressStore.opening(from: removed, in: library).patent, library.first?.key,
             "the opening for a patent the library no longer has")
 
-        // A re-imported patent keeps the document and drops the highlight, rather than
-        // putting it over whatever rows those indices now name.
+        // A re-imported patent keeps the document and drops the position. A paragraph
+        // number looks stabler than a row index and is not: under `.synthesized` numbering
+        // it is the parser's own count, so a re-parse can renumber the whole document.
         var drifted = record
         drifted.stamp = "not the digest of anything"
         let afterDrift = ProgressStore.opening(from: drifted, in: library)
         log.equal(afterDrift.patent, patent.key, "the patent after the source changed")
         log.check(
-            afterDrift.selection == nil,
-            "a selection should be dropped when the stamp does not match")
+            afterDrift.focus == nil,
+            "a position should be dropped when the stamp does not match")
 
-        // A record written against a longer document.
+        // A record naming a paragraph this patent does not have.
         var past = record
-        past.selection = PassageSelection(anchor: 99_999, head: 99_999)
-        log.equal(
-            ProgressStore.opening(from: past, in: library).selection,
-            PassageSelection(at: patent.rows.count - 1),
-            "a selection past the end of the document")
+        past.focus = .paragraph(ParagraphKey(patent: patent.key, number: 99_999))
+        log.check(
+            ProgressStore.opening(from: past, in: library).focus == nil,
+            "a position past the end of the document should be dropped")
+
+        // The front-matter address is `Chunker`'s and belongs to no document, so it is not
+        // a position anything can be restored to.
+        var front = record
+        front.focus = .paragraph(ParagraphKey(patent: patent.key, number: 0))
+        log.check(
+            ProgressStore.opening(from: front, in: library).focus == nil,
+            "front matter is not a reading position")
+
+        // Schema 2. A record written by schema 1 held a pair of row indices into a reader
+        // that no longer exists, and there is deliberately no migration — `progress()`
+        // returns `nil` for a version it does not know, and what is lost is one scroll
+        // position on one launch.
+        log.equal(ProgressStore.schemaVersion, 2, "the reading-position schema version")
 
         // MARK: The back stack
 
         var history = NavigationHistory()
         log.check(!history.canGoBack, "a fresh history has nothing to go back to")
 
-        let first = NavigationHistory.Position(patent: patent.key, row: 5)
-        let second = NavigationHistory.Position(patent: other.key, row: 9)
+        let first = NavigationHistory.Position(
+            patent: patent.key,
+            target: .paragraph(ParagraphKey(patent: patent.key, number: 5)))
+        let second = NavigationHistory.Position(
+            patent: other.key, target: .claim(ClaimKey(patent: other.key, number: 2)))
         history.push(first)
         log.check(history.canGoBack, "a pushed position is reachable")
         log.equal(history.goBack(from: second), first, "going back")
@@ -2631,7 +2373,10 @@ enum SelfTest {
         // unwind.
         history = NavigationHistory()
         for row in 0 ..< 100 {
-            history.push(NavigationHistory.Position(patent: patent.key, row: row))
+            history.push(
+                NavigationHistory.Position(
+                    patent: patent.key,
+                    target: .paragraph(ParagraphKey(patent: patent.key, number: row))))
         }
         var depth = 0
         while history.canGoBack, depth < 200 {
@@ -2639,94 +2384,6 @@ enum SelfTest {
             depth += 1
         }
         log.check(depth <= 32, "the back stack grew past its cap: \(depth)")
-    }
-
-    // MARK: - Word lookup
-
-    /// Where one word of the text begins and ends.
-    ///
-    /// Ported, and retargeted at the punctuation patents have rather than the punctuation
-    /// verse has: hyphenated compounds, alphanumeric part designations, and decimals.
-    private static func wordTokenizer(_ log: Log) {
-        func words(_ text: String) -> [String] {
-            WordTokenizer.words(in: text).map { String(text[$0]) }
-        }
-
-        /// The invariant that makes a hover mark trustworthy: the ranges tile the string.
-        /// Ordered, non-overlapping, non-empty, and everything they leave out is
-        /// punctuation or space — a gap with a letter in it is a word the reader can
-        /// point at and be told nothing about.
-        func tiles(_ text: String, _ label: String) {
-            let ranges = WordTokenizer.words(in: text)
-            var cursor = text.startIndex
-            for range in ranges {
-                log.check(!range.isEmpty, "\(label): an empty word range in \"\(text)\"")
-                log.check(
-                    range.lowerBound >= cursor,
-                    "\(label): word ranges overlap or run backwards in \"\(text)\"")
-                for character in text[cursor ..< range.lowerBound] {
-                    log.check(
-                        !character.isLetter && !character.isNumber,
-                        "\(label): \"\(character)\" in \"\(text)\" is in no word")
-                }
-                cursor = range.upperBound
-            }
-            for character in text[cursor...] {
-                log.check(
-                    !character.isLetter && !character.isNumber,
-                    "\(label): trailing \"\(character)\" in \"\(text)\" is in no word")
-            }
-            for range in ranges {
-                for index in text[range].indices {
-                    log.equal(
-                        WordTokenizer.word(at: index, in: text), range,
-                        "\(label): the word at \"\(text[index])\" in \"\(text)\"")
-                }
-            }
-        }
-
-        log.equal(
-            words("the heat sink 100 is less expensive"),
-            ["the", "heat", "sink", "100", "is", "less", "expensive"],
-            "a sentence with a reference numeral")
-        // Hyphenated compounds stay whole, which patents are full of and `.byWords` gets
-        // wrong on its own.
-        log.equal(
-            words("hour-glass shaped pins"), ["hour-glass", "shaped", "pins"],
-            "a hyphenated compound")
-        log.equal(
-            words("thermally-conductive matrix"), ["thermally-conductive", "matrix"],
-            "another hyphenated compound")
-
-        func term(_ text: String) -> String {
-            guard let range = WordTokenizer.words(in: text).first else { return "" }
-            return WordTokenizer.term(for: range, in: text)
-        }
-        log.equal(term("matrix,"), "matrix", "the term of \"matrix,\"")
-        log.equal(term("hour-glass"), "hour-glass", "the term of \"hour-glass\"")
-
-        let line = "the heat sink"
-        guard let space = line.firstIndex(of: " ") else {
-            log.fail("no space in a string with two of them")
-            return
-        }
-        log.check(
-            WordTokenizer.word(at: space, in: line) == nil, "a space resolved to a word")
-
-        tiles("", "an empty line")
-        for text in [
-            "the heat sink 100 is less expensive", "hour-glass shaped pins, 0.5 mm apart",
-            "H05K7/20336 and US 10,123,456 B2",
-        ] {
-            tiles(text, "a hand-written line")
-        }
-
-        // And against the real thing, because the invariant is about punctuation the
-        // corpus has and hand-written strings do not.
-        guard let patent = parsed("US10123456B2") else { return }
-        for row in patent.rows {
-            tiles(row.plainText, "US10123456B2 row \(row.index)")
-        }
     }
 
     // MARK: - Fixtures for the synthetic suites

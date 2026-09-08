@@ -135,8 +135,13 @@ struct Claim: Codable, Sendable, Hashable {
     }
 
     let number: Int
-    /// The claim's opening clause, with its printed number removed — the reader draws
-    /// that in the margin, so leaving it would print it twice.
+    /// The claim's opening clause, **with its printed number removed**.
+    ///
+    /// The reader that stripped it drew the number in its own margin, and that reader is
+    /// gone; the field keeps the shape because everything downstream now depends on it —
+    /// and because one of them depends on putting it *back*. `PassageAnchors` anchors a
+    /// claim on `"\(number). "` plus this, because the office's typesetter prints the
+    /// number and it is what makes the anchor nearly unique.
     let text: String
     let elements: [ClaimElement]
     let dependsOn: [Int]
@@ -144,9 +149,13 @@ struct Claim: Codable, Sendable, Hashable {
 
     var isIndependent: Bool { dependsOn.isEmpty }
 
-    /// The whole claim as one run, which is what a citation quotes and what the index
-    /// embeds. The reader's hanging indent is a rendering of `elements`, not a fact
-    /// about the text.
+    /// The whole claim as one run, which is what the index embeds and what a copied
+    /// selection is resolved against.
+    ///
+    /// **Never an anchor.** `PassageAnchors` scored 3/20 with this against 20/20 with the
+    /// number and the preamble: the office prints a claim as a preamble and a hanging
+    /// indent, so its elements are separated in the document by line breaks that no
+    /// `findString` crosses.
     var fullText: String {
         ([text] + elements.map(\.text)).joined(separator: " ")
     }
@@ -157,9 +166,9 @@ struct Claim: Codable, Sendable, Hashable {
 /// A claim is drafted as a preamble and a nested list — "A method comprising: / using
 /// additive manufacturing techniques: / forming a lower shell; / forming an internal
 /// matrix" — and the nesting is the claim's logical structure, not its layout. Flattened
-/// with a depth rather than kept as a tree because the reader draws it as a hanging
-/// indent, which is a depth, and because a tree would have to be flattened again for the
-/// index and for ⌘C.
+/// with a depth rather than kept as a tree because a tree would have to be flattened again
+/// for the index and for the terminal's `--claim`, and because the depth is the only part
+/// of the nesting anything downstream reads.
 struct ClaimElement: Codable, Sendable, Hashable {
     let depth: Int
     let text: String
@@ -364,18 +373,6 @@ enum Citation {
     /// the two platforms copy through different mechanisms from different views — macOS
     /// hands an `NSItemProvider` to the responder chain, iOS writes `UIPasteboard` from
     /// a toolbar — and the *text* is the same either way.
-    static func quotation(_ patent: Patent, rows: [DocumentRow]) -> String {
-        let body = rows.map(\.copyText).joined(separator: "\n")
-        let references = rows.compactMap { $0.target(in: patent.key) }.map {
-            string($0, numbering: patent.numbering)
-        }
-        // A selection of headings alone cites nothing and gets no trailer, which is what
-        // `DocumentRow.target(in:)` already decided.
-        guard let trailer = trailer(references) else { return body }
-        return body + "\n\n" + trailer
-    }
-
-    /// The same, for text the reader dragged out of the office's own PDF.
     ///
     /// **What was selected**, verbatim, and not the paragraphs it fell inside. A drag across
     /// half a sentence is a request to quote half a sentence; handing back the two whole

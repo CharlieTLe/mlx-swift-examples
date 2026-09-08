@@ -9,13 +9,26 @@ import Foundation
 struct ReadingProgress: Codable, Sendable, Equatable {
     let schemaVersion: Int
     var patent: PatentKey
-    var selection: PassageSelection?
+
+    /// The passage the reader was last sent to, or `nil`.
+    ///
+    /// **A `CitationTarget` and deliberately not a page number**, even though what is being
+    /// restored is a scroll position in a PDF. A paragraph number survives a re-downloaded
+    /// PDF and a page number does not: the office reissues corrected publications, and
+    /// `patentimages` is not this app's storage. That is the argument `PatentPDFService.pages`
+    /// already makes about *not* persisting the page, and this inherits it rather than
+    /// overturning it — the position that is worth keeping is the one addressed the way a
+    /// citation is.
+    var focus: CitationTarget?
+
     /// `Patent.source.contentSHA256` for `patent`.
     ///
-    /// The mirror of `AnswerCache`'s digest gate: a stored selection is a pair of row
-    /// indices, so a patent re-imported from a changed source must not restore a
-    /// highlight over different rows. On mismatch the patent is kept and the selection
-    /// dropped.
+    /// The mirror of `AnswerCache`'s digest gate, and it keeps its job for a better reason
+    /// than the one it had. It used to guard a pair of *row indices*, which a re-import
+    /// obviously invalidates. A paragraph number looks stabler and is not: under
+    /// `Numbering.synthesized` the numbers are the parser's own count from 1, so a re-parse
+    /// of a changed source can renumber every paragraph in the document. On mismatch the
+    /// patent is kept and the position dropped.
     var stamp: String
 }
 
@@ -31,7 +44,15 @@ struct ReadingProgress: Codable, Sendable, Equatable {
 /// `ReadingProgress` whose synthesized `Codable` would then shadow the stdlib's and
 /// recurse. `Data` goes in directly.
 enum ProgressStore {
-    static let schemaVersion = 1
+    /// 2: `selection`, a pair of row indices into the deleted text reader, became `focus`,
+    /// a `CitationTarget`.
+    ///
+    /// **No migration**, and none is wanted. `progress()` already returns `nil` for a
+    /// version it does not know, and what is thrown away is one restored scroll position:
+    /// the first launch after the upgrade opens the same patent at the top instead of where
+    /// the reader was. Writing a migration for that would be more code than the thing is
+    /// worth, and code that runs once.
+    static let schemaVersion = 2
 
     private static let progressKey = "readingProgress"
 
@@ -55,11 +76,12 @@ enum ProgressStore {
     ///
     /// A record is only a hint, and every way it can fail to describe *this* library
     /// falls back rather than being handed through: a patent that was deleted comes back
-    /// as the first one in the library, and a patent whose source changed keeps the
-    /// document and drops the selection, since the indices it holds may now point at
-    /// different rows.
+    /// as the first one in the library, a patent whose source changed keeps the document
+    /// and drops the position, and a passage the patent no longer has is dropped too — a
+    /// re-parse can renumber, and restoring `[0042]` onto whatever is now the forty-second
+    /// paragraph is the failure the stamp exists to prevent.
     static func opening(from record: ReadingProgress?, in library: [Patent])
-        -> (patent: PatentKey?, selection: PassageSelection?)
+        -> (patent: PatentKey?, focus: CitationTarget?)
     {
         guard let record, let patent = library.first(where: { $0.key == record.patent })
         else { return (library.first?.key, nil) }
@@ -67,7 +89,10 @@ enum ProgressStore {
         guard patent.source.contentSHA256 == record.stamp else {
             return (record.patent, nil)
         }
-        return (record.patent, record.selection?.clamped(to: patent.rows))
+        guard let focus = record.focus,
+            CitationCheck.exists(focus, in: [patent.key: patent])
+        else { return (record.patent, nil) }
+        return (record.patent, focus)
     }
 }
 
@@ -82,10 +107,14 @@ enum ProgressStore {
 /// not accumulate forty entries they would have to press ⌘[ forty times to unwind; thirty
 /// two is far more than anybody unwinds and small enough to be free.
 struct NavigationHistory: Equatable, Sendable {
-    /// One place in the library: a document, and where in it.
+    /// One place in the library: a document, and which passage in it.
+    ///
+    /// A `CitationTarget` and not a page, for `ReadingProgress.focus`'s reason — and one
+    /// this adds: the back stack outlives a re-download of the PDF, and a page number would
+    /// send ⌘[ to a page that is no longer the one the reader left.
     struct Position: Equatable, Sendable {
         var patent: PatentKey
-        var row: Int?
+        var target: CitationTarget?
     }
 
     private(set) var back: [Position] = []

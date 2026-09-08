@@ -460,12 +460,37 @@ struct AnswerPaneView: View {
     }
 }
 
+/// The `patentreader://` URL vocabulary, other than a citation.
+///
+/// Moved here from the deleted `DocumentRowView`, which is where the document's own
+/// reference-numeral and claim cross-reference runs used to be built. **No view emits these
+/// today** — the original PDF is typeset text this app cannot annotate a link onto — so what
+/// is left is the addresses `ContentView.open(_:)` still answers to, and the scheme constant
+/// that `CitationLink` below is built on.
+///
+/// Kept rather than deleted with the runs, because the routing behind them is not view code:
+/// `ContentView.showNumeral(_:)` is a pure "which paragraph introduces part 130" search over
+/// the parse, and it works, and it is the only thing in the app that knows how to answer that
+/// question. What it lost is the affordance, not the answer.
+enum ReaderLink {
+    case numeral(Int)
+    case claim(Int)
+
+    static let scheme = "patentreader"
+
+    var url: URL? {
+        switch self {
+        case .numeral(let value): URL(string: "\(Self.scheme)://numeral/\(value)")
+        case .claim(let value): URL(string: "\(Self.scheme)://claim/\(value)")
+        }
+    }
+}
+
 /// A citation, as a URL SwiftUI can carry on an attributed run.
 ///
 /// The scheme is this app's own and never leaves it: `ContentView` intercepts every
 /// `patentreader://` URL with an `OpenURLAction` and returns `.handled`, so nothing is
-/// ever passed to the system. See `ReaderLink`, which uses the same scheme for the
-/// document's own reference numerals and claim cross-references.
+/// ever passed to the system. See `ReaderLink` above, which shares the scheme.
 struct CitationLink {
     let target: CitationTarget
 
