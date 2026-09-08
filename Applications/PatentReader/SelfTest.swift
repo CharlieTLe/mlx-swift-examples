@@ -715,6 +715,75 @@ enum SelfTest {
             !text(crossRuns).contains("  "),
             "the qualifier was not absorbed into the citation")
 
+        // The bracket the model actually writes. The prompt asks for `[0019] of US …` and
+        // the model regularly wraps the whole citation instead. Reading only the documented
+        // spelling left every qualified paragraph citation as plain prose — unclickable,
+        // unhighlighted, and unreported, because nothing was scanned to have a verdict
+        // about. It showed only with two patents in scope, which is the only time a
+        // qualifier appears at all.
+        let wrapped = scan(
+            "Both use a plug [0019 of US 10,123,456 B2] and [0012 of US 8,534,348 B2].",
+            context: cross)
+        log.equal(
+            citations(wrapped),
+            ["[0019 of US 10,123,456 B2]", "[0012 of US 8,534,348 B2]"],
+            "a qualifier inside the brackets is still a citation")
+        func citedTargets(_ runs: [AnswerRun]) -> [CitationTarget] {
+            runs.compactMap { if case .citation(let c) = $0 { c.target } else { nil } }
+        }
+        log.equal(
+            citedTargets(wrapped),
+            [
+                .paragraph(ParagraphKey(patent: key, number: 19)),
+                .paragraph(ParagraphKey(patent: other, number: 12)),
+            ],
+            "and it resolves to the patent named inside the brackets")
+        log.equal(
+            citations(scanWhole(
+                "Both use a plug [0019 of US 10,123,456 B2] and "
+                    + "[0012 of US 8,534,348 B2].", context: cross)),
+            citations(wrapped),
+            "streaming and whole disagree about a bracketed qualifier")
+        log.check(
+            !text(wrapped).contains("]]") && text(wrapped).hasSuffix("."),
+            "the closing bracket belongs to the citation and is not left as prose")
+
+        // The two spellings must not disagree about where they point, since an answer can
+        // contain both and a reader cannot be expected to know the difference.
+        log.equal(
+            citedTargets(scan("[0019 of US 10,123,456 B2]", context: cross)),
+            citedTargets(scan("[0019] of US 10,123,456 B2", context: cross)),
+            "the wrapped and unwrapped spellings name the same passage")
+
+        // And the qualifier against a WIPO number, which is the shape the US fixtures above
+        // cannot exercise: a ten-digit serial with no grouping commas and an `A9` kind
+        // code, where every US example has seven or eight digits, commas, and `B2`.
+        let wipo = PatentKey(country: "WO", serial: "2020247738", kind: "A9")
+        let wipoLibrary = [fakePatent(wipo, paragraphs: [355], claims: [1])]
+        let wipoContext = fakeContext(
+            question: "what linker?",
+            retrieved: [.paragraph(ParagraphKey(patent: wipo, number: 355))],
+            patents: [wipo, key])
+        for spelling in [
+            "[00355 of WO 2020247738 A9]", "[00355] of WO 2020247738 A9",
+        ] {
+            var scanner = CitationScanner(context: wipoContext, library: wipoLibrary)
+            for character in spelling { scanner.consume(String(character)) }
+            scanner.finish()
+            log.equal(
+                citedTargets(scanner.runs),
+                [.paragraph(ParagraphKey(patent: wipo, number: 355))],
+                "\(spelling) resolves to WO 2020247738 A9 paragraph 355")
+        }
+
+        log.equal(
+            citations(scan("the plug [0019 of the shells] is one piece", context: cross)),
+            [], "a bracket that is not a qualifier is not a citation")
+        log.equal(
+            text(scan("the plug [0019 of the shells] is one piece", context: cross)),
+            "the plug [0019 of the shells] is one piece",
+            "and its text survives verbatim")
+
         // An unqualified citation in a cross-patent answer resolves to the primary
         // patent — the one that contributed the most passages — and the check downstream
         // is what catches it when that guess is wrong.

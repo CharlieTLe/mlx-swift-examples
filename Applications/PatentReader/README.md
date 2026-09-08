@@ -697,7 +697,18 @@ suites, including:
   sake: a citation arrives split at an arbitrary byte boundary, and feeding whole strings
   exercises none of it. This suite found two real bugs — a complete citation at the end of
   a stream rendering as plain text, and `[0019] of US 10,123` committing against a patent
-  that does not exist because the serial had not finished arriving.
+  that does not exist because the serial had not finished arriving. It now also pins the
+  **bracket the model actually writes**: the prompt asks for `[0042] of US 10,123,456 B2`
+  and a model told to qualify a bracketed citation routinely wraps the whole thing instead,
+  `[0042 of US 10,123,456 B2]`. Reading only the documented spelling cost every qualified
+  paragraph citation its link — and only ever with two patents in scope, since a qualifier
+  appears nowhere else. `¶42 of …` was unaffected, because `¶` needs no closing delimiter
+  and the brackets simply fell out as prose either side of it, so an answer could show two
+  citations side by side with one blue and one not and the difference was which numbering
+  the patent happened to arrive with. Both spellings are pinned, against a WIPO number as
+  well as a US one — ten digits, no grouping commas, an `A9` kind code — and so is the
+  prose that merely looks like the opening of one: `[0019 of the shells]` cites nothing,
+  which is the hole the first draft of the fix left open and the suite caught.
 - **`indexIntegrity`** — over synthetic deterministic vectors, so it stays model-free:
   every entry names something that exists, every indexable paragraph has an entry,
   dimensions agree, no non-finite values, every vector is unit length, and the base64

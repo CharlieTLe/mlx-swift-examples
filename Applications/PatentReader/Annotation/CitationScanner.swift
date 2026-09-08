@@ -177,6 +177,11 @@ struct CitationScanner {
     /// - `claim 7`
     /// - either of the above followed by ` of US 10,123,456 B2`, which is the form the
     ///   prompt asks for when more than one patent is in scope.
+    /// - **and `[0042 of US 10,123,456 B2]`**, which the prompt does not ask for and the
+    ///   model writes regularly: told to qualify a bracketed citation, it wraps the whole
+    ///   thing rather than closing the bracket after the number. Reading only the
+    ///   documented spelling cost every qualified paragraph citation its link, and only
+    ///   ever with two patents in scope, since a qualifier appears nowhere else.
     ///
     /// **A match that reaches the end of the buffer is not a match yet**, unless nothing
     /// more is coming. This is the rule the whole streaming design turns on and it is
@@ -193,9 +198,10 @@ struct CitationScanner {
     /// resolves to a paragraph that exists but was not retrieved, and comes out
     /// `.unretrieved` rather than as a link to the wrong document.
     private func match(_ candidate: String, isFinal: Bool) -> Match {
-        guard let (literal, target) = matchLocator(candidate) else {
+        guard let locator = matchLocator(candidate) else {
             return isPartialLocator(candidate) && !isFinal ? .partial : .no
         }
+        let literal = locator.literal
 
         let rest = String(candidate.dropFirst(literal.count))
         if rest.isEmpty, !isFinal {
@@ -205,37 +211,88 @@ struct CitationScanner {
 
         switch matchQualifier(rest, isFinal: isFinal) {
         case .matched(let suffix, let patent):
-            return .matched(literal: literal + suffix, target: retarget(target, to: patent))
+            var whole = literal + suffix
+            if locator.bracketOpen {
+                // `[00355 of WO 2020247738 A9]`: the closing bracket is part of the
+                // citation, and leaving it behind would print a stray `]` after the chip.
+                let after = candidate.dropFirst(whole.count)
+                if after.first == "]" {
+                    whole += "]"
+                } else if after.isEmpty, !isFinal {
+                    return .partial
+                }
+            }
+            return .matched(literal: whole, target: retarget(locator.target, to: patent))
         case .partial:
+            // An unclosed bracket that outran the buffer is not a citation: the only
+            // reason to accept `[0019` without its `]` was the qualifier that was supposed
+            // to follow, so committing the bare number here would invent one.
+            if locator.bracketOpen { return candidate.count > Self.maximumCandidate ? .no : .partial }
             return candidate.count > Self.maximumCandidate
-                ? .matched(literal: literal, target: target) : .partial
+                ? .matched(literal: literal, target: locator.target) : .partial
         case .no:
-            return .matched(literal: literal, target: target)
+            // `[0019 of the shells]` — prose that opens like a qualified citation and is
+            // not one. The lookahead only proved there was an ` of ` after the number, and
+            // without a patent behind it there is nothing here to cite.
+            if locator.bracketOpen { return .no }
+            return .matched(literal: literal, target: locator.target)
         }
     }
 
-    private func matchLocator(_ candidate: String) -> (String, CitationTarget)? {
+    /// A locator and what it cost to read: `[0042]`, `¶42`, `claim 7`, `[0042` .
+    private struct Locator {
+        let literal: String
+        let target: CitationTarget
+        /// The opening `[` has not been closed yet, because the qualifier is inside the
+        /// brackets. The closing one belongs to this citation's literal.
+        let bracketOpen: Bool
+    }
+
+    private func matchLocator(_ candidate: String) -> Locator? {
         let primary = self.primary
         if let match = try? /^\[(\d{1,5})\]/.prefixMatch(in: candidate),
             let number = Int(match.1)
         {
-            return (
-                String(match.0),
-                .paragraph(ParagraphKey(patent: primary, number: number))
-            )
+            return Locator(
+                literal: String(match.0),
+                target: .paragraph(ParagraphKey(patent: primary, number: number)),
+                bracketOpen: false)
+        }
+        // `[00355 of WO 2020247738 A9]`, which is not the form the prompt asks for and is
+        // the form a model writes anyway. The prompt says `[0042] of US 10,123,456 B2`,
+        // closing the bracket after the number; asked to qualify a citation, the model
+        // routinely wraps the whole thing instead. Reading only the documented spelling
+        // cost every qualified paragraph citation its link — silently, and only when more
+        // than one patent was in scope, because that is the only time a qualifier appears.
+        //
+        // The `¶` form was unaffected and that is what made it hard to see rather than
+        // easy: `[¶473 of US 11,028,179 B2]` links today, because `¶473` needs no closing
+        // delimiter, so the brackets simply fall out of the match as prose on either side.
+        // Two citations side by side in one answer, one blue and one not, and the
+        // difference is which numbering the patent happened to arrive with.
+        if let match = try? /^\[(\d{1,5})(?=\s+of\s)/.prefixMatch(in: candidate),
+            let number = Int(match.1)
+        {
+            return Locator(
+                literal: String(match.0),
+                target: .paragraph(ParagraphKey(patent: primary, number: number)),
+                bracketOpen: true)
         }
         if let match = try? /^¶\s?(\d{1,5})/.prefixMatch(in: candidate),
             let number = Int(match.1)
         {
-            return (
-                String(match.0),
-                .paragraph(ParagraphKey(patent: primary, number: number))
-            )
+            return Locator(
+                literal: String(match.0),
+                target: .paragraph(ParagraphKey(patent: primary, number: number)),
+                bracketOpen: false)
         }
         if let match = try? /^[Cc]laim\s+(\d{1,3})/.prefixMatch(in: candidate),
             let number = Int(match.1)
         {
-            return (String(match.0), .claim(ClaimKey(patent: primary, number: number)))
+            return Locator(
+                literal: String(match.0),
+                target: .claim(ClaimKey(patent: primary, number: number)),
+                bracketOpen: false)
         }
         return nil
     }
@@ -250,7 +307,16 @@ struct CitationScanner {
     private func isPartialLocator(_ candidate: String) -> Bool {
         if candidate.count > Self.maximumCandidate { return false }
         if candidate.first == "[" {
-            return candidate.dropFirst().allSatisfy(\.isNumber)
+            let body = candidate.dropFirst()
+            let digits = body.prefix(while: \.isNumber)
+            let after = body.dropFirst(digits.count)
+            if after.isEmpty { return true }
+            guard !digits.isEmpty else { return false }
+            // The qualifier may be inside the brackets, so a candidate stays alive all the
+            // way through ` of WO 2020247738 A9]` rather than dying at the first space.
+            let template = " of "
+            return after.count < template.count
+                ? template.hasPrefix(after) : after.hasPrefix(template)
         }
         if candidate.first == "¶" {
             return candidate.dropFirst().allSatisfy { $0.isNumber || $0 == " " }
