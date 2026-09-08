@@ -2,9 +2,10 @@
 
 A SwiftUI app for macOS, iPhone and iPad that answers questions about a library of
 patents on-device — and cites the paragraphs it answered from, so **clicking a citation
-lands you on the passage**, highlighted, in a document pane that stayed on screen the
-whole time. After the initial model download there are no network calls except fetching
-patents, and fetching a patent's original PDF the first time you open its PDF tab.
+lands you on the passage**, marked, **in the PDF the office published**. Not in a reading
+of it: in the document itself, with its figures, its tables and its own typesetting, in a
+pane that stayed on screen the whole time. After the initial model download there are no
+network calls except fetching patents — the page, and the PDF beside it.
 
 Reading a patent to answer a specific question is miserable in a way that is not the
 reader's fault. The answer is almost never in one place: it is a sentence in `[0042]`,
@@ -94,8 +95,14 @@ signal to tidy the symptom. Counts by verdict go in the diagnostics strip and in
 **What none of this catches**, and the UI should not imply otherwise: a real, retrieved
 paragraph cited for a claim it does not make comes back *supported* and always will. No
 string comparison reaches that. What the app can do instead is make checking cheap — one
-click puts you in front of the actual paragraph — and that is what the whole design is
-for.
+click puts you in front of the actual paragraph, in the office's own PDF — and that is what
+the whole design is for.
+
+An answer also **paints its evidence onto the document**: pale for the passages the model
+was shown, solid for the ones it cited, accent for the chip you just clicked. Three
+statements a reader needs at once, on the page rather than in a sidebar. A citation the
+model produced without being shown the paragraph is painted *nothing*, which is the same
+argument that already makes that chip unclickable.
 
 ### Getting patents in
 
@@ -110,15 +117,18 @@ wide. The HTML gives paragraph numbers, the claim dependency graph and reference
 as *data*; the PDF gives text, and everything else has to be reconstructed from regular
 expressions. Use the number where you have one.
 
-**Either way the library keeps the original PDF**, which is what the reader's second tab
-shows. A dropped file is copied into the library at import, because a picker URL on iOS is
-dead after the next launch and a path on a Mac breaks the moment the file moves. A patent
-fetched by number is *not* downloaded eagerly: the page carries a
-`<meta name="citation_pdf_url">` pointing at the office's own PDF, and that link is
-followed the first time somebody opens the PDF tab and never again. **Patents imported
-before any of this existed get it too** — the page they were parsed from is already on
-disk, the link is read back out of it at the next launch, and nothing has to be
-re-imported.
+**Either way the library keeps the original PDF**, because it is what the reader reads. A
+dropped file is copied into the library at import, since a picker URL on iOS is dead after
+the next launch and a path on a Mac breaks the moment the file moves. A patent fetched by
+number carries a `<meta name="citation_pdf_url">` pointing at the office's own PDF, and
+that link is followed **during the import, awaited** — one extra request while the reader is
+already waiting, rather than a few megabytes fetched later behind a click. The order is
+therefore three-stage: parsed, then readable, then searchable. A patent in the library is
+one you can open, offline included.
+
+**Patents imported before any of this existed get it too** — the page they were parsed from
+is already on disk, the link is read back out of it, and each gains its PDF the first time
+it is opened, with no re-import.
 
 The PDF path refuses rather than importing something wrong in three cases, all of which
 produce a document that would look fine and be useless: a PDF with **no text layer** (a
@@ -126,7 +136,7 @@ scanned pre-1976 grant), one whose recovered `[nnnn]` numbers are **not ascendin
 means the two columns were read interleaved and the paragraphs would be shuffled, and one
 where a single paragraph comes out holding **most of the document**, which means the
 paragraph breaks stopped being found and everything after that point was merged into one
-row that every citation would then name.
+paragraph that every citation would then name.
 
 Short of refusing, the paragraph breaks come from whichever of **three readings** the
 document supports, tried in order of how much each one claims:
@@ -141,7 +151,7 @@ The third is the crude one and `Source.note` says when it was used. It is also w
 a **PCT application as filed** readable: no `[nnnn]` markers are printed in one, the
 applicant did not number the paragraphs and no office added them, and PDFKit returns its
 pages as one line per printed line with no blank line anywhere — so without it, three
-hundred paragraphs are a single row.
+hundred paragraphs are a single paragraph.
 
 Before any of that, the **page furniture** comes off: the running head, the page number,
 and the printed line numbers down the margin. None of the three is part of the document
@@ -249,174 +259,204 @@ patent or offers to fetch it, `[0042]` and `claim 7` jump inside the open one, a
 else filters the list by title, assignee and inventors. It never looks at a word of the
 specification.
 
-The reader's field, ⌘F, searches the words. That is the question a patent reader actually
-asks most — *where does this one say "internal matrix"?* — and it is the one thing the app
-could not do. `DocumentFind` is a value type with the matching rules in it, so `--selftest`
-asserts them without a view.
+The reader's field, ⌘F, searches the words of the document on screen, through
+`PDFDocument.findString`. That is the question a patent reader actually asks most — *where
+does this one say "internal matrix"?* — and `PDFView` ships no find UI on either platform:
+Preview's find bar is Preview's own code over the same call. So this app builds one, and
+`FindBar` is shared byte for byte with the reader that came before.
 
-Three things about it are worth stating, because each had a plausible alternative:
+Two things about it are worth stating, because each had a plausible alternative:
 
 - **The count is the feature.** `3 of 47` is what tells a reader that a term is used
   throughout rather than once, which turns ⌘G into a survey of how the specification uses
   it. A field that only jumped to the next hit would answer a smaller question.
-- **Matching does not reuse `LibrarySearch`'s folding**, and this is the subtle one. Folding
-  is right for a filter, where only the verdict matters, and wrong here because it *rewrites*
-  the string — it drops apostrophes and decomposes diacritics — and an offset into a
-  rewritten string does not address the original. One `L'Oréal` earlier in the paragraph
-  would shift every highlight after it by a character. `range(of:options:)` reports its
-  answer in the original's own indices with the same insensitivity, so the offsets are right
-  by construction rather than by a compensating calculation. `--selftest` checks every match
-  in a real fixture by going back to the text and reading what its offsets address.
 - **Finding does not select.** A selection here scopes the reader's next question, so a find
   that selected what it landed on would quietly narrow the next question to whatever word
-  they were checking the spelling of. Hits are drawn as a run background — yellow, and orange
-  for the current one, deliberately not the accent colour that the selection band, the
-  landing flash and the reference numerals already share.
+  they were checking the spelling of. Hits go through `PDFView.highlightedSelections` and
+  never `setCurrentSelection` — yellow, and orange for the current one.
 
-⌘F therefore belongs to the document, and the library's filter moved to **⌥⌘F** to give it
+⌘F therefore belongs to the document, and the library's filter is on **⌥⌘F** to give it
 up: two hidden buttons cannot share a shortcut, and of the two fields the document's is the
 one ⌘F means everywhere else. ⌘G and ⇧⌘G step, Esc closes, and on a phone — which has none of
 those keys — the bar is raised from the overflow menu.
 
-A hit inside a claim is the one case that needed real work. A claim is **one** row whose text
-is its preamble and its elements joined, because that is the unit a citation names and ⌘C
-copies, but `ClaimRowView` draws those pieces separately — so a highlight has to be cut to
-the piece being drawn and rebased onto it. Spans are simply dropped past the preamble, which
-is a small loss; a highlight cannot be, because it is what the reader is looking for.
+Esc is a ladder: the find bar, then the selection, then whatever the app is doing. It is a
+`.keyboardShortcut(.escape)` button rather than `.onExitCommand`, because `PDFView`'s own
+document view takes first responder — which is also how the arrows, space and page keys
+scroll without this app writing a line of it.
 
-### Two selections, and the margin between them
+### One reader, and how a paragraph number finds itself in it
 
-The prose is **system-selectable text** on both platforms: drag out a clause, copy exactly that
-clause. A reader quoting a patent into an email wants the clause, not the paragraph.
+There were two until recently, behind a segmented control: a list of parsed rows, and the
+office's PDF. The parsed text was always a *means* — it is how the app builds an index,
+fills a prompt and names a citation, and it still does all three — and the PDF is the thing
+a patent reader actually wants in front of them: figures, tables, chemical structures, the
+real typesetting, and the ability to check that `[0042]` is `[0042]`. A **scanned**
+pre-1976 grant renders here even though `PatentPDFImporter` refuses to import one, which is
+half the point.
 
-It coexists with the *passage* selection — whole rows, banded — which is the one the app can
-act on: it scopes a question, keys the answer cache, and produces a citation. There are two
-because SwiftUI never reports which characters are in a text selection, so nothing the app does
-can be built on one. Not being told about a selection is no reason to deny the reader one; it
-only means the app cannot cite it.
+The one thing the parsed view could do that the PDF could not was land a citation on a
+passage, and this codebase argued at length, in two places, that it never would:
 
-Both wanted the same gesture, and the arbitration is a hit test rather than a mode:
+> A paragraph number is a fact about the parsed text; the PDF is paginated by the office's
+> typesetting and carries no index this app can resolve `[0042]` against.
 
-- **The prose** belongs to the text selection. Drag it on a Mac, long-press it on a phone.
-- **The number margin** belongs to the passage. It prints the paragraph or claim number, which
-  is not prose and can never be part of a quotation, so a press there can only mean "this
-  row" — and on a phone a long press there still sweeps a range of rows.
-- Rows are otherwise selected by clicking, shift-clicking, double-clicking a heading for a whole
-  section, and ⇧↑/⇧↓.
+**That was wrong.** A paragraph's own first words are an index into the PDF, they are
+already in the parse, `PDFDocument.findString` resolves one in about two milliseconds, and
+`PDFAnnotation` marks what it finds. What the argument got right is that it is not exact —
+so the design is a measurement rather than a claim, and the failures are reported rather
+than hidden.
 
-Getting that boundary wrong is not subtle. Armed from anywhere, as the sweep first was, one long
-press on a phone produced grab handles *and* a five-row selection band at once — two selections
-of two different things from one gesture. The Mac accordingly no longer sweeps rows by dragging:
-the pointer's drag is the text's now, and click plus shift-click is how a table has always built
-a range. Nothing became unreachable.
+#### The measurements it rests on
 
-**A heading is not selectable**, and that one is easy to get wrong in the other direction. Its
-job here is to be a handle — double-clicking one takes the heading and every row under it, which
-is how a reader scopes a question to the Background — and a selectable heading loses that,
-because the text view swallows the double click to select a word. Headings are also the one
-thing in the document that cannot be quoted: they carry no citation.
+Probed against three real patent PDFs — a 163-page PCT publication, a 131-page **two-column**
+US grant, a 57-page PCT application as filed — anchoring on text from the app's own parse.
+`--anchor <number>` reproduces this on any patent in any library:
 
-**⌘C therefore stopped being unambiguous, and ⇧⌘C is the answer.** ⌘C is what a reader presses
-to copy the phrase they just dragged out, which is the expectation to honour. The
-citation-appended quotation is a different thing and cannot be derived from a text selection, so
-it has its own key. With a row selected and no text selection — the ordinary case — ⌘C still
-copies the passage exactly as it always did.
+| | PCT publication | US grant (2 col) | PCT as filed |
+|---|---|---|---|
+| paragraphs located, first **6** words | 428/437 (97%) | 1241/1272 (97%) | 284/289 (98%) |
+| of those, **ambiguous** (2–4+ matches) | 242 | 822 | 63 |
+| placed in ascending order after the monotonic pass | **428, 0 stuck** | **1241, 0 stuck** | **284, 0 stuck** |
+| placements the monotonic pass *changed* vs first-match | 179 (42%) | 715 (58%) | 44 (15%) |
+| claims, `"7. "` + first **4** words | 113/120 (94%) | 20/20 | 21/21 |
+| `findString` cost, warm | ~2 ms per anchor; a whole document 0.3–2.8 s | | |
 
-Two limitations are worth stating rather than discovering:
+Four findings decided the design, each of which had a plausible wrong answer:
 
-- **A character selection stops at the paragraph it started in.** Every row is its own `Text`,
-  which is what makes rows the unit of everything else, so no selection spans two paragraphs.
-  That is less of a hole than it sounds, because the two selections divide the work: characters
-  for a phrase inside one paragraph, a passage for a run of them — and the passage is the one
-  that comes with a citation, which is what quoting several paragraphs is usually for.
-- **Selecting a row does not clear a character selection**, or the reverse. SwiftUI offers no
-  way to clear or even observe one, so both can be live at once in different rows. The banded row
-  is always the one a question is scoped to.
+- **Short anchors win.** Twelve words fell to about 50% — line wrap and hyphenation break a
+  long match, and `findString` crosses neither. Six is the sweet spot; four for a claim.
+- **Ambiguity is the norm, and ordering resolves it.** Most anchors match in several places,
+  because that is what a patent is: it says "the internal matrix 130" in the summary, again
+  in the description, and again in a claim. Every candidate gets a *text-stream* ordinal —
+  `(page index, offset within the page)` — and the targets are walked in document order
+  taking the earliest candidate after the previous choice. A **geometric** ordinal `(page, y)`
+  instead collapses on the two-column grant, 93 of 1241 placed, because reading order there
+  is not top-to-bottom. When a target has no candidate after the cursor it is left unplaced
+  and **the cursor does not move**: one lost chip beats cascading a stray early match into
+  everything after it.
+- **A claim anchors on its number plus its preamble.** `Claim.text` has the printed number
+  stripped, because the old reader drew it in the margin; the office prints it, so putting
+  it back makes the anchor both findable and nearly unique. `Claim.fullText` scores 3/20 and
+  must never be used — a claim's elements are separated in the printed document by a hanging
+  indent. Claim 1 of the canonical fixture is three words long (`A method comprising:`), so
+  the four-word rule is a maximum rather than a minimum: the number is doing the work.
+- **`.highlight` annotations render translucently** here, verified by rendering a page with
+  and without one and counting surviving dark pixels (0.188 → 0.201). No opaque-box
+  workaround was needed. The subtype choice is behind one function so `.underline` is a
+  one-line swap if a future release composites differently.
 
-One diagnosis that was wrong twice is worth leaving written down, because it cost two rounds of
-device verification. It looked as though selectable text had broken scrolling: a slow drag over
-the prose selected characters and moved the document not one point. Turning selection back off
-did not fix it — the same drag still failed to scroll, and swept rows instead. The culprit was
-`SweepRecognizer`'s own long press, which a *synthesized* drag arms because it dwells at its
-start point where a finger keeps moving, and the threshold sat exactly at its 0.3s
-`minimumPressDuration`. Scrolling was never the text's fault. The same round of measurement did
-find a real bug in that recognizer: it subtracted the content offset without the adjusted content
-inset, so every press landed about an inset — ~136pt, two rows — further down the document than
-the finger, which is fixed.
+The gap in the evidence, stated plainly: all three probes are PDF-*imported* patents, where
+the parse and the PDF are the same document. For a patent fetched by number the text comes
+from Google's HTML and the PDF from `patentimages`, so they can diverge — `US10123456B2`
+claim 5 reads "wherein fon ling the internal matrix" in Google's OCR. There are no PDF
+fixtures in the repo and `--selftest` is PDFKit-free by policy, so `--anchor` is how that
+case gets measured.
 
-### Two views of one patent
+#### Three channels that cannot collide
 
-A segmented control at the head of the reader pane: **Reader text** and **Original PDF**.
+| What | Mechanism | Colour |
+|---|---|---|
+| the answer's evidence | `PDFAnnotation` | retrieved `yellow 0.18`, cited `yellow 0.42`, focused `accent 0.30` |
+| find hits | `PDFView.highlightedSelections` | `yellow 0.30`, current `orange 0.55` |
+| the reader's selection | `PDFView.currentSelection` | the system's |
 
-The reader text is this app's argument — rows, paragraph numbers in the margin, a claim
-tree, citation chips that land on a passage — and it is a *reading* of the document. The
-PDF is the document. A figure, a table, a chemical structure, a signature block and the
-office's own typesetting are all things the parse cannot carry, and "is `[0042]` really
-`[0042]` in the printed grant?" is a question only the original answers. A **scanned**
-pre-1976 grant renders perfectly here even though `PatentPDFImporter` refuses to import
-one, which is half the point.
+Separate mechanisms, so closing the find bar cannot disturb an answer's marks and a
+selection cannot disturb either. Retrieved is deliberately quieter than a find hit: "the
+model was shown this" is weaker evidence than "you searched for this".
 
-Everything the app *does* addresses the parsed text, and the division is worth stating
-plainly because it is what a reader has to hold:
+**In memory only. `.source.pdf` is never rewritten.** No `write(to:)`, no
+`dataRepresentation()`, no autosave. Those bytes are what `NOTICE.md` describes and what the
+app promises are the office's, and the manual checklist `cmp`s the file before and after a
+session of highlighting. `PatentPDFMarks` also tracks exactly the annotations it added and
+removes only those: an office PDF ships its own link annotations, and clearing
+`page.annotations` wholesale would vandalise the document on screen.
 
-- **A citation click always switches you to the text**, deliberately. A paragraph number
-  is a fact about the parse; the PDF is paginated by the office's typesetting and carries
-  no index this app can resolve `[0042]` against. So the tab moves with the jump rather
-  than the jump quietly doing nothing behind a PDF. Same for a reference numeral, a claim
-  cross-reference, `[0042]` typed into the library field, a section picked from the
-  outline, and ⌘[ / ⌘].
-- **⌘F switches too**, and raises the reader's find bar. `PDFView` ships no find UI on
-  either platform — Preview's find bar is Preview's own code — so a ⌘F left unbound would
-  be a working shortcut that silently stopped working on one tab. The macOS header button
-  and the iOS overflow row do the same.
-- **⇧⌘C is absent on the PDF tab.** A citation needs rows, and a `PDFSelection` cannot be
-  mapped back to a paragraph. **⌘C is PDFKit's own** and copies the selection *uncited*,
-  because no truthful citation can be attached to it.
-- **Esc does nothing there.** Esc means "put that away" in a ladder — find bar, selection,
-  cancel — and a tab is not a thing you put away.
-- The PDF tab is PDFKit and nothing else: no find bar, no row selection, no chips drawn
-  over it. Continuous vertical scroll, its own zoom and selection, opened at page 1 and
-  remembering its page per patent for the launch.
+One annotation per printed **line**, via `selectionsByLine()`. Not an optimisation — it makes
+more objects — but correctness: a multi-line selection's `bounds(for:)` is one union
+rectangle, which on a two-column grant covers the neighbouring column.
 
-One reader is in the hierarchy at a time — a `switch`, not a hidden `ZStack` — which is
-what guarantees there are never two ⌘Fs and never a several-hundred-row `LazyVStack` and a
-`PDFDocument` resident at once. It costs two things, both accepted: the find bar and its
-query do not survive a trip to the PDF, and a hand-panned scroll position is lost, though
-a reader with a row selected lands back on it.
+#### When a passage cannot be located
 
-**Both segments are always there and always enabled**, even with no PDF to show, because a
-disabled segment states the fact and withholds the reason and the pane's chrome would
-change shape as you click down the library. There are four ways to have no PDF and each
-one names itself and what to do: the page carried no `citation_pdf_url`; the stored page
-is gone, so remove the patent and fetch it again; a PDF import whose copy was not kept, so
-import the file again; and a text import, which never had one. A download that fails
-reports the underlying error **verbatim** with a **Try again** button, and does not
-re-request itself every time you touch the control.
+3% of paragraphs and about 6% of claims. It is **reported, three times over**, in the three
+places this app already reports things:
 
-### Typography
+1. the reader is scrolled to the nearest passage that *was* found, and it is marked focused;
+2. a transient band over the document: *"`[0042]` is in this patent, but it could not be
+   found in the office's PDF. The nearest passage that could is `[0041]`."*;
+3. a third line in the diagnostics tally, beside "cited but not retrieved" and "cited and
+   does not exist": **"cited and not found in the PDF"**.
 
-- **Every paragraph number in the margin**, tabular figures, system face for its digits.
-  Every one, not every fifth: a play numbers lines so a citation can be checked and a
-  number on every line is noise, where a patent's paragraph number *is* the citation
-  target and every one of them is something the answer pane may point at.
-- **Claims as a hanging-indent tree.** One indent level per step from an independent
-  claim, a `⌐6` badge naming the parent, and the words "claim 6" inside the text linked to
-  the same place. This is the biggest legibility win available and it costs nothing,
-  because the dependency data is exact. A claim set is a tree that every patent prints as
-  a flat list, and reconstructing it by hand is a reader's first job on opening one.
-- **Claim elements hang** at their own nesting depth, at body size rather than a step
-  down — they are not an aside, they are the claim.
-- **Reference numerals** are tinted and set in tabular figures **only when the source
-  tagged them**, from `figure-callout`. Never a regex guessing that every three-digit
-  number is a part. Hovering one names it; clicking goes to where it is introduced.
-- **Front page as a card**: title, number, dates, assignee, inventors, CPC with the
-  office's own gloss, abstract — and the provenance, including anything the importer had
-  to admit to.
-- Measure capped at 640pt, about 70 characters, scaled with the type.
+Deliberately *not* a fourth `CitationCheck.Verdict`. The verdicts are model-free, PDFKit-free
+and decided at commit time inside `CitationScanner`, and a case that depended on a document
+being open — and on a map having finished walking it — would break all three at once. A chip
+whose paragraph exists and was retrieved is a good citation whatever this app can do with a
+PDF; that it cannot land on it is a fact about the app, and it is reported as one.
 
-Four typefaces and five sizes, from the same `Aa` menu, remembered between launches, and
-setting the **patent text only** — the library, the answers and the chrome stay on the
-system face.
+Plus one document-wide diagnostics line, `anchored 428/437 paragraphs · 106/120 claims`, so a
+new document shape that drops to 60% is visible rather than mysterious. That failure is
+otherwise *quiet*: chip by chip it looks exactly like a handful of unlucky paragraphs.
+
+#### The rest of the reader
+
+- **Every jump lands here**: a citation chip, `[0042]` typed into the library field, a
+  section picked from the outline, a claim cross-reference, and ⌘[ / ⌘]. A section has no
+  heading row to scroll to in a PDF, so it aims at the section's **first passage** — `claim 1`
+  for the Claims sentinel — which puts the heading one line above the fold and inherits the
+  placement the whole document already computed. A reference numeral keeps its pure "first
+  paragraph that mentions it" search over the parse and then narrows *within that paragraph's
+  own bracket* of the document, so the reader lands on the numeral rather than near it.
+- **⇧⌘C copies the selection with its citation.** Two legs: the anchor map's ordinals are
+  binary-searched for the passages the drag's two ends fall inside — which never compares a
+  character, so hyphenation and OCR cannot break it — and `PassageAnchors.target(containing:)`
+  is the textual fallback where the map has no bracket. What is copied is **what was
+  selected**, not the paragraphs it fell inside: a drag across half a sentence is a request to
+  quote half a sentence. When both legs fail the text is copied uncited **and says so**, in
+  the copied text, where it is still true after the paste.
+- **⌘C is PDFKit's own** and copies uncited — the system copy, left alone deliberately so that
+  ⇧⌘C is the one that means "with the citation".
+- **A selection scopes a question** to the open patent, exactly as a row selection used to.
+  Deliberately not narrowed to the selected passages: `Retriever`'s scope is a
+  `Set<PatentKey>`, and narrowing retrieval to a span inside one document is a different
+  feature with its own ranking question.
+- Continuous vertical scroll, PDFKit's own zoom and selection, opened at page 1 and
+  remembering its page per patent for the launch. The **reading position** that is persisted is
+  a `CitationTarget` and not a page: a paragraph number survives a re-downloaded PDF and a page
+  number does not.
+- **An unavailable PDF is reported, never hidden**, and there is no second view to fall back
+  to. Four ways to have none, each naming itself and what to do: the page carried no
+  `citation_pdf_url`; the stored page is gone, so remove the patent and fetch it again; a PDF
+  import whose copy was not kept, so import the file again; and a text import, which never had
+  one. A download that fails reports the underlying error **verbatim** with a **Try again**
+  button, and does not re-request itself every time you come back to the patent.
+
+**Two-column selection is PDFKit's to get wrong**, and the app says so rather than pretending
+otherwise: a drag down one column can pick up the other in text-stream order. The bracket
+lookup copes and produces a range citation, which is *true* — the selection really does span
+those passages — but the copied text reads scrambled. A span of many passages from a small
+amount of text raises the same band.
+
+### What went with the parsed reader, and what it costs
+
+A pure subtraction of about 3,500 lines, and three of the losses are real rather than
+bookkeeping:
+
+- **Accessibility.** The parsed reader gave Dynamic Type over the body text, four typefaces,
+  five sizes, system text selection, and a document VoiceOver could read. A PDF reflows for
+  nobody; pinch-zoom on a two-column grant is not a substitute, and annotations announce
+  nothing. The answer pane's chips remain the accessible route to a passage. This is the one
+  item that would argue for keeping the parsed view behind a preference, and it was decided
+  rather than discovered.
+- **Word lookup.** Double-clicking a term of art and getting the system dictionary is gone
+  with `DictionaryLookup`; PDFKit's own long-press menu has **Look Up** on iOS.
+- **In-document links.** Reference numerals and claim cross-references were tinted, tappable
+  runs in the parsed prose. There is nowhere to hang a link on typeset PDF text, so they
+  survive only in the answer pane. `ContentView.showNumeral(_:)` still answers the question —
+  it is what a `patentreader://numeral/130` URL routes to — but nothing emits one now.
+
+Also gone, and unmissed: the front-page card, the row band and its sweep gesture, the
+hanging-indent claim tree, and the paragraph-number margin — all of which the office's own
+document draws better, or prints for itself.
 
 ## Latency
 
@@ -512,6 +552,7 @@ APP=$(xcodebuild -configuration Release -showBuildSettings -scheme PatentReader 
 "$APP" --fetch US10123456B2          # live fetch + index; the only live-parse check
 "$APP" --patent US10123456B2 --paragraph 19
 "$APP" --patent US10123456B2 --claim 7
+"$APP" --anchor US10123456B2         # anchor its stored PDF and report how well it went
 "$APP" --show-prompt --patent US10123456B2 --ask "how is the matrix formed?"
 "$APP" --benchmark
 "$APP" --greedy        # temperature 0, for prompt A/B work
@@ -521,7 +562,8 @@ The flags are read by `EntryPoint` before SwiftUI starts, so they need the execu
 inside the bundle rather than `open`, and not `./mlx-run PatentReader ...`, which
 backgrounds an app scheme with `&` and loses the exit code.
 
-`--selftest` is model-free and network-free and covers twenty-two suites, including:
+`--selftest` is model-free, network-free and **PDFKit-free**, and covers twenty-one
+suites, including:
 
 - **`originalPDFLink`** — the `citation_pdf_url` read out of each of the four fixtures,
   asserted down to the filename, plus the rejections: `http:`, `file:` and `javascript:`
@@ -532,7 +574,32 @@ backgrounds an app scheme with `&` and loses the exit code.
   an opaque content hash. Constructing that URL from the number is right for three
   documents in four, which is exactly the shape of change that gets made as a
   simplification and then 404s for a quarter of a library.
-- **`originalPDFAvailability`** — every state of the PDF tab, driven through a pure
+- **`passageAnchors`** — the needles, which is where the app's central promise is defended
+  in a form a build can check. A paragraph's is exactly six single-spaced words, checked
+  against a hand-written expectation *and* against the invariant that it is a prefix of the
+  paragraph's own text; a claim's is `"7. "` plus four words and **never** spills into
+  `elements` — the 20/20-against-3/20 measurement, pinned so that a "simplification" fails
+  the build. No anchor for paragraph 0, which is `Chunker`'s synthetic front matter and
+  exists in no document. Anchors ascend in document order, which is what the placement pass
+  requires of its input. And the count of paragraphs too short to anchor is a pinned number
+  per fixture, because that number *is* the promise's failure rate.
+- **`passagePlacement`** — the ordering rule, over synthetic candidate lists, since there is
+  no PDF in this repository and `--anchor` is how the real thing gets measured. Identity when
+  unambiguous; `[[A1,A5],[A2,A6],[A7]]` → A1, A2, A7, which is the case naive first-match
+  gets wrong; a target placed late forcing the next past its own first candidate; stuck →
+  unplaced with the cursor unmoved and later targets still placing; empty → unplaced;
+  `Candidate(page: 1, offset: 9000) < Candidate(page: 2, offset: 0)`. And over a thousand
+  seeded random shapes, the one invariant that is the whole guarantee: **every placed ordinal
+  is strictly greater than the one before it.** Plus the find cursor's wrap, lifted verbatim
+  out of the deleted `DocumentFind` so its assertions outlived it.
+- **`highlightPlan`** — precedence, and the three exclusions that are the interesting half:
+  `.unretrieved` and `.nonexistent` citations get no mark, because painting one would be the
+  app endorsing a connection the model invented in the most authoritative place it has; front
+  matter gets none; another patent's passages are dropped.
+- **`passageLookup`** — fixture text run through a synthetic mangler — re-wrapped, a hyphen
+  inserted across a break, doubled spaces — still resolves to the right `ParagraphKey`, and a
+  foreign string returns `nil` rather than a nearest guess.
+- **`originalPDFAvailability`** — every state the PDF can be in, driven through a pure
   constructor with a real stored page, including **the retroactive case**: a patent
   imported before this feature existed, with nothing on disk but the page it was parsed
   from, recovers a working PDF link. The four unavailable reasons are asserted for their
@@ -562,72 +629,74 @@ backgrounds an app scheme with `&` and loses the exit code.
 - **`citationCheck`** — all three verdicts, including a paragraph of a *different* patent
   in the library (real, so `unretrieved`) and one of a patent that is not (so
   `nonexistent`).
-- **`documentFind`** — the offsets, checked by going back to each row's text and reading
-  what they address, over every hit for a term that occurs 60-odd times in a real fixture.
-  That is the assertion worth having: a wrong count is visible on screen and a broken wrap
-  goes nowhere, but a match addressed one character to the left just draws a highlight that
-  looks slightly off, which is the kind of wrong that ships. Also the wrap in both
-  directions, the reading-position anchor, and the claim clipping that puts a hit in the
-  element it is actually in.
-- Plus `patentNumbers`, `citations`, `chunking`, `lexicalRetrieval`,
+- Plus `patentNumbers`, `citations` — extended for the quotation a PDF selection copies,
+  including the uncited one that says so — `chunking`, `lexicalRetrieval`,
   `pdfParagraphRecovery`, `librarySearch`, `goldenPromptRender`, and the ported
-  `quoteCheck`, `selection`, `followUpParsing`, `readerFonts`, `readerTextSizes`,
-  `readingProgress` and `wordTokenizer`.
+  `quoteCheck`, `followUpParsing` and `readingProgress`.
 
-**`--fetch` is the check `--selftest` cannot be.** The fixtures are checked in, which is
-what makes the self test fast and hermetic and also means it can only detect drift that
-has already been captured. Fetching a patent that is not a fixture is what catches Google
-Patents changing its markup *today*.
+**`--fetch` and `--anchor` are the checks `--selftest` cannot be.** The fixtures are checked
+in, which is what makes the self test fast and hermetic and also means it can only detect
+drift that has already been captured. Fetching a patent that is not a fixture is what catches
+Google Patents changing its markup *today*. And `--anchor` is the only way to measure
+anchoring at all, since there is no PDF in this repository and `--selftest` touches no
+PDFKit — in particular it is the only way to see the HTML-imported case, where the parse came
+from Google and the PDF from `patentimages` and the two can genuinely disagree:
+
+```
+US 11,028,179 B2 — 131 pages
+  placed 1241/1272 paragraphs · claims 20/20 · ambiguous 822 · monotonic changed 715
+  0 too short to anchor · 0 fell back · 2.75s
+  not found: ¶89, ¶94, ¶107, ¶339, … and 27 more
+```
 
 ### Checked by hand, because CI builds no app targets
 
 `.github/workflows/pull_request.yml` builds the package and four CLI tool schemes and no
 app targets — ShakespeareReader is not in it and neither is this. So: both platform
 builds; a real iOS *device* run, since Metal, the memory ceiling and the
-increased-memory-limit entitlement are all device-only; a PDF drop checked against the
-printed document by eye; citation chips clicked in each of the three verdict states,
-including one that crosses patents, with ⌘[ back; ⌘F over a claim, since a hit inside a
-claim element is the one highlight whose offsets are rebased rather than used as they are;
-and the two selections — a phrase dragged out of the prose and copied with ⌘C, a row swept
-from the number margin and copied with ⇧⌘C — since neither is anything `--selftest` can see.
-**The touch sweep in particular wants a real finger**: a synthesized drag arms its long press
-where a finger keeps moving, which is what made scrolling look broken on a simulator twice.
+increased-memory-limit entitlement are all device-only; and everything below, none of which
+`--selftest` can reach.
 
-The PDF tab adds a list of its own, none of which `--selftest` can reach:
-
-- **Storage.** Fetch a patent and check the library directory: a `.json` and a
-  `.source.html` and **no** `.source.pdf` — nothing was downloaded. Open its PDF tab: a
-  spinner, then the document, and no second request when you switch away and back. Drop a
-  PDF on the library and the `.source.pdf` is there *immediately*, before the tab is
-  opened, and `cmp`s equal to the file dropped. Delete the patent and all four files go —
-  `.json`, `.source.html`, `.source.pdf`, `Index/<slug>.json`. `NOTICE.md` names the PDF
-  and its column is right for a mix of patents.
-- **The retroactive case.** Import two patents on `main`, switch to this branch, launch:
-  both gain a working PDF tab from HTML already on disk, with no re-import.
-- **Layout.** The Mac at the 1100pt window minimum with three panes open — the control is
-  not clipped and does not stretch. iPhone portrait, iPad regular, and iPad in **Slide
-  Over**, which is the size-class transition the bar has to survive. Nothing open: no tab
-  bar at all.
-- **Keys.** ⌘F from the PDF tab switches to the text *and* leaves the keyboard in the find
-  field — type without clicking. The header button and the overflow row do the same. On the
-  PDF: ⇧⌘C does nothing, ⌘C copies uncited, arrows and space scroll, Esc does nothing,
-  ⌘[ ⌘] ⌘L ⌘1 ⌘2 all still work. Back on the text, nothing fires twice.
-- **The jump.** With the PDF up: click a supported chip, type `[0042]` into the library
-  field, pick a section from the outline, follow a cross-patent citation — each one flips
-  the tab and lands on the paragraph, flashing, with ⌘[ to undo it.
+- **The marks.** Ask a question and confirm pale marks on the eight retrieved passages,
+  solid on the ones the answer cited, and the accent on the chip you just clicked. An
+  `.unretrieved` chip paints nothing, which is the point. Then `cmp` the `.source.pdf`
+  before and after a session of highlighting: **the bytes must not have moved.**
+- **The jump.** Click each chip and land on the paragraph, ⌘[ back. A cross-patent citation.
+  `[0042]` in the library field. A section from the outline. A claim cross-reference. And a
+  chip whose paragraph cannot be located — force one by editing a `.json` paragraph's first
+  words — which must scroll to the neighbour, raise the band naming it, and add the third
+  tally line.
+- **Anchoring, on shapes the probes did not cover.** `--anchor` a patent fetched by number
+  (parse from Google, PDF from `patentimages`) and one imported from a PDF, and read the
+  rate. A **scanned** pre-1976 grant with no text layer: everything reports, the diagnostics
+  line reads `anchored 0/n`, and nothing crashes.
+- **Find.** ⌘F with the count, ⌘G/⇧⌘G stepping and wrapping, the query surviving a click down
+  the library, and Esc's ladder — bar, then selection, then cancel.
+- **Selection.** Drag text → "ask about this" scopes to the patent. ⇧⌘C copies with a
+  citation; a **front-page** selection copies uncited *and says so*; a drag down one column of
+  a two-column grant raises the implausible-span band. ⌘C stays PDFKit's own.
+- **Storage and the eager download.** Fetch a patent and check the library directory: a
+  `.json`, a `.source.html` **and** a `.source.pdf`, all three there before the patent is
+  readable. Then turn the Wi-Fi off and open it — it must read, offline. Drop a PDF and the
+  `.source.pdf` `cmp`s equal to the file dropped. Delete the patent and all four files go,
+  index included. `NOTICE.md` names the PDF.
+- **The retroactive case.** Import two patents on `main`, switch to this branch, launch: both
+  gain a working PDF from HTML already on disk, with no re-import, one at a time as they are
+  opened.
 - **The four no-PDF states**, made by hand: strip the `citation_pdf_url` meta from a
-  `.source.html`; delete a `.source.html`; delete a `.source.pdf` for a PDF-imported
-  patent; and turn the Wi-Fi off, which must report the real `URLError` text, offer **Try
-  again**, and *not* re-request on every tab switch while it is failed.
-- **PDFKit itself**, on a **real iOS device and not the Simulator**: pinch zoom, long-press
-  selection with the system edit menu, momentum scroll, and memory with a large grant PDF
-  plus a loaded model, which is the one thing the Simulator can say nothing about. On the
-  Mac, ⌘-scroll zoom, drag-select and right-click Copy. And a **scanned** pre-1976 grant,
-  which renders here even though the importer refuses it.
-- **Regressions the new bar could cause.** The dictionary popover still appears over the
-  word rather than offset by the bar's height — both the reporter and the anchor use the
-  pane's own coordinate space, but the bar moved the pane's origin. The touch sweep from
-  the number margin still selects rows and still scrolls.
+  `.source.html`; delete a `.source.html`; delete a `.source.pdf` for a PDF-imported patent;
+  and turn the Wi-Fi off for a fetch, which must report the real `URLError` text, offer
+  **Try again**, and *not* re-request every time you come back to the patent.
+- **Layout.** The Mac at the 1100pt window minimum with three panes open. iPhone portrait,
+  iPad regular, and iPad in **Slide Over**, which is the size-class transition to survive.
+- **PDFKit itself**, on a **real iOS device and not the Simulator**: pinch zoom, the
+  long-press edit menu including **Look Up**, momentum scroll, and memory with a large grant
+  PDF plus a loaded model — the one thing the Simulator can say nothing about. On the Mac,
+  ⌘-scroll zoom and right-click Copy.
+- **The map's cost, on a device.** Anchoring the 1272-paragraph grant is 2.8 s of main-actor
+  work on a warm desktop, yielded every 32 anchors. Scroll and select while it runs and
+  confirm it stays smooth; `PatentPDFMap.build(in:limitedTo:)` is the escape hatch if it does
+  not.
 
 ## Notes
 
@@ -648,19 +717,18 @@ The PDF tab adds a list of its own, none of which `--selftest` can reach:
 - **A citation is a `link`, not a `Button`.** `Text` will not host a button, so a tappable
   run inside flowing prose has to be an attributed `link`, intercepted by an
   `OpenURLAction` that returns `.handled` so nothing reaches the system. The document's
-  reference numerals and claim cross-references use the same `patentreader://` scheme and
-  the same handler, because from the reader's side they are one interaction: a thing in
-  the text that takes you to the thing it names. Citations therefore **flow and wrap with
-  the prose** rather than sitting in a row of chips, which is what a citation has to do.
-- **The flash highlight animates opacity and nothing else.** `DocumentRowView`'s
-  size-neutrality contract — row height feeds `RowFramesKey`, which is written into
-  `@State`, which is read back during layout — makes any animating geometry a layout loop
-  running at 60 Hz. The overlay's `id` changes per jump so a second jump to the same row
-  re-fires; a bare row index would be "no change" and the reader would click and see
-  nothing.
-- **A programmatic jump is not a selection.** `DocumentReaderView.select(_:)` requests
-  keyboard focus; the jump writes `selection` directly. And unlike the sibling, selecting
-  a row here **starts nothing** — a selection scopes the next question — so there is no
+  same `patentreader://` scheme also addresses reference numerals and claim
+  cross-references, and `ContentView.open(_:)` still routes them, though nothing draws one
+  now that the parsed prose is gone. Citations **flow and wrap with the prose** rather than
+  sitting in a row of chips, which is what a citation has to do.
+- **A jump carries a fresh identity, not a target.** `PassageFocus` holds a `UUID`, so
+  clicking the same chip twice moves the reader twice; a bare `CitationTarget` would be "no
+  change" the second time and the click would appear to do nothing. The old row reader's
+  `FlashHighlight` carried the same `UUID` for the same reason.
+- **A programmatic jump does not select.** `PDFView.go(to: PDFSelection)` scrolls and leaves
+  `currentSelection` alone, which is what keeps the three channels apart: a jump must not
+  scope the reader's next question, exactly as a find hit must not. Selecting **starts
+  nothing** either — a selection scopes the next question and no more — so there is no
   debounced commit for a jump to trip.
 - **A follow-up does not re-retrieve.** It runs on the same session against the same
   passages, so a citation in the follow-up refers to the same set as the answer above it,
@@ -688,11 +756,13 @@ The PDF tab adds a list of its own, none of which `--selftest` can reach:
   which is the index's invalidation lever — every patent in every library reindexed, tens
   of GPU-seconds each, to store a string. `Source.url` is no help either: it is the Google
   *page* on one path and a possibly-gone local file on the other.
-- **The PDF's page position is in memory only.** `ReadingProgress` is stamped with
-  `contentSHA256`, which is a digest over the *text*; an unstamped page number could be
-  restored against a PDF that has since been replaced and put the reader on page 40 of a
-  different document while looking exactly like a restored position. The reading position
-  that matters is the text's, and that one is stamped.
+- **The PDF's page position is in memory only, and so is its anchor map.** What is persisted
+  is a `CitationTarget`, stamped with `contentSHA256`. A page number, or a `(page, offset)`
+  placement, would be restored against bytes that may have been re-downloaded and put the
+  reader on page 40 of a different document while looking exactly like a restored position. A
+  paragraph number survives that — and the stamp catches the case where it does not, since
+  under `.synthesized` numbering the numbers are the parser's own count and a re-parse can
+  renumber the whole document.
 - **Index invalidation is six fields**, recorded per file: schema, source digest, parser
   version, chunker version, model id and embedding prefix. Any mismatch reindexes that
   patent and no others.
@@ -705,11 +775,13 @@ app fetches one page per patent, on request, and does not crawl.
 
 There is a second host. The original PDF comes from
 `patentimages.storage.googleapis.com`, at the URL the page itself names in its
-`citation_pdf_url` meta — one file per patent, only when a reader opens that patent's PDF
-tab, never crawled and never fetched ahead of being asked for. The same unclear-terms
-caveat below applies to it, and the app names the host on screen while it is downloading
-rather than pinning it in code, so a moved bucket reports honestly instead of silently
-looking like a patent with no PDF.
+`citation_pdf_url` meta — one file per patent, as that patent is imported, never crawled. It
+is fetched eagerly now, which is a change worth naming here rather than only in the code:
+the PDF is the document the app shows, so a patent whose bytes have not arrived is a patent
+nobody can read. Still one request per patent, still only for patents a reader asked for by
+number. The same unclear-terms caveat below applies to it, and the app names the host on
+screen while it is downloading rather than pinning it in code, so a moved bucket reports
+honestly instead of silently looking like a patent with no PDF.
 
 **Terms of service for programmatic access to `patents.google.com` have not been cleared
 by this project**, and that is worth your own read before relying on this beyond personal
