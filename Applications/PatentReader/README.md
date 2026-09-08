@@ -108,7 +108,8 @@ click puts you in front of the actual paragraph, in the office's own PDF — and
 the whole design is for.
 
 An answer also **paints its evidence onto the document**: pale for the passages the model
-was shown, solid for the ones it cited, accent for the chip you just clicked. Three
+was shown, solid for the ones it cited, accent for the chip you just clicked. Each mark
+covers the whole passage rather than the words the anchor found it by. Three
 statements a reader needs at once, on the page rather than in a sidebar. A citation the
 model produced without being shown the paragraph is painted *nothing*, which is the same
 argument that already makes that chip unclickable.
@@ -440,6 +441,36 @@ One annotation per printed **line**, via `selectionsByLine()`. Not an optimisati
 more objects — but correctness: a multi-line selection's `bounds(for:)` is one union
 rectangle, which on a two-column grant covers the neighbouring column.
 
+**A mark covers the passage, not the needle.** For a while it covered the needle, which is six
+words — or, once anchoring moved to the printed markers, the bare `[00355]` and nothing else.
+A reader who asked a question and got evidence painted onto the document saw the first line
+of a paragraph tinted under a tooltip reading *"the passage you asked for"*: pointing at the
+evidence while claiming to be it. `PatentPDFMap.extent(of:in:)` runs from a passage's own
+placement to the next one, which `ordinals` already knows, bounded by the passage's own length
+so that a gap left by an unplaced neighbour — or the last placement in the document, with
+twenty-six pages of sequence listing behind it — cannot run away.
+
+The bound is **an eighth over the parse's length, and no constant**. The eighth is what the
+PDF's text carries that the parse took out: a line break per printed line, and the margin line
+numbers the importer strips. A flat slack on top looked harmless and was not — eighty
+characters is nothing against a long paragraph and doubles a short one, and short paragraphs
+are most of the tail. Measured over the three documents, highlighted words against the
+passage's own:
+
+| bound | median | p90 | p99 | short | > 125% |
+|---|---|---|---|---|---|
+| `n + n/2 + 80`, grant | 1.01 | 2.00 | 3.67 | 27 | 321 of 1241 |
+| `n + n/8`, grant | 1.01 | 1.20 | 1.27 | 28 | **16** |
+| `n + n/8`, PCT publication | 1.01 | 1.04 | 1.12 | **0** | 1 of 437 |
+
+The 28 that come up short are the placement drift above, which this bound cannot see and does
+not cause: where the *next* passage was placed inside this one, the next placement wins and the
+mark stops early. Fixing those is fixing the placement, not the extent — and on the document
+that anchors exactly, nothing comes up short at all.
+
+The jump still goes to the needle rather than the extent, because `PDFView.go(to:)` scrolls to
+make a selection visible and the precise landing is the point of a citation chip.
+
 #### When a passage cannot be located
 
 None of a document that prints its markers, since the marker is always there to be found;
@@ -747,7 +778,10 @@ increased-memory-limit entitlement are all device-only; and everything below, no
 
 - **The marks.** Ask a question and confirm pale marks on the eight retrieved passages,
   solid on the ones the answer cited, and the accent on the chip you just clicked. An
-  `.unretrieved` chip paints nothing, which is the point. Then `cmp` the `.source.pdf`
+  `.unretrieved` chip paints nothing, which is the point. Each mark must cover **the whole
+  passage** and stop at its end — not the first line, and not into the paragraph below. On a
+  two-column grant confirm it stays inside its own column, which is what `selectionsByLine()`
+  is for and the one thing a union rectangle gets visibly wrong. Then `cmp` the `.source.pdf`
   before and after a session of highlighting: **the bytes must not have moved.**
 - **The jump.** Click each chip and land on the paragraph, ⌘[ back. A cross-patent citation.
   `[0042]` in the library field. A section from the outline. A claim cross-reference. And a

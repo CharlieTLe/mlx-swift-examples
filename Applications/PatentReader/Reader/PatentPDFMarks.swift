@@ -65,7 +65,10 @@ final class PatentPDFMarks {
         applied = plan.roles
 
         for (target, role) in plan.roles {
-            guard let selection = map.selection(for: target) else { continue }
+            // The extent and not the needle: the needle is six words, or on a document that
+            // prints its markers the bare `[00355]`, and a mark that size is pointing at the
+            // evidence rather than showing it.
+            guard let selection = map.extent(of: target, in: document) else { continue }
             let label = Citation.chipLabel(target, numbering: numbering)
             for line in selection.selectionsByLine() {
                 for page in line.pages {

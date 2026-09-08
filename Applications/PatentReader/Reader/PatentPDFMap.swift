@@ -237,6 +237,83 @@ final class PatentPDFMap {
 
     func selection(for target: CitationTarget) -> PDFSelection? { placed[target] }
 
+    /// The whole passage, for painting: from where it starts to where the next one does.
+    ///
+    /// **The needle is an address, not the thing being addressed**, and for a while the marks
+    /// were drawn on the address. A reader who asked a question and got back evidence painted
+    /// onto the document saw six words of a paragraph lit up — or, on a document that prints
+    /// its markers, the bare `[00355]` and nothing else — under a tooltip reading "the passage
+    /// you asked for". It was pointing *at* the passage while claiming to *be* it.
+    ///
+    /// The extent is already known and costs nothing to read: `ordinals` is every placement in
+    /// document order, so a passage runs from its own position to the next placement, and two
+    /// entries of an array that is already sorted answer it.
+    ///
+    /// Bounded by the passage's own length as the parse measured it, because the next
+    /// placement is not always the next passage. A paragraph that could not be located leaves
+    /// a gap, and the last placement in the document has nothing after it at all — a claim at
+    /// the end of a PCT publication would otherwise paint the twenty-six pages of sequence
+    /// listing behind it.
+    ///
+    /// **An eighth over, and no constant.** The eighth is what the PDF's own text carries that
+    /// the parse took out: a line break per printed line, and the margin line numbers
+    /// `PatentPDFImporter` strips. A flat slack on top of it looked harmless and was not —
+    /// eighty characters is nothing against a long paragraph and doubles a short one, and
+    /// short paragraphs are most of the tail. Measured over the three documents: with
+    /// `n/2 + 80`, 321 of the grant's 1241 passages painted more than a quarter past their
+    /// own end and the 90th percentile was exactly twice the passage; with `n/8` it is 16 and
+    /// 1.20, for one extra passage cut short. The 28 that do come up short are the placement
+    /// drift this bound cannot see and does not cause — where the *next* passage was placed
+    /// inside this one, the next placement wins and the mark stops early.
+    func extent(of target: CitationTarget, in document: PDFDocument) -> PDFSelection? {
+        guard let start = placed[target].flatMap({
+            Self.position(of: $0, first: true, in: document)
+        }) else { return nil }
+
+        let budget = expectedLength(of: target)
+        var end = advance(start, by: budget + budget / 8, in: document)
+        if let next = ordinals.first(where: { $0.candidate > start })?.candidate, next < end {
+            end = next
+        }
+        guard
+            let startPage = document.page(at: start.page),
+            let endPage = document.page(at: end.page)
+        else { return placed[target] }
+        // `atCharacterIndex` is inclusive at both ends, so the last character of the passage
+        // is the one before the next passage's first.
+        let last = end.page == start.page ? max(end.offset - 1, start.offset) : end.offset - 1
+        return document.selection(
+            from: startPage, atCharacterIndex: start.offset,
+            to: endPage, atCharacterIndex: max(last, 0)) ?? placed[target]
+    }
+
+    /// How many characters this passage ran to in the parse.
+    private func expectedLength(of target: CitationTarget) -> Int {
+        switch target {
+        case .paragraph(let key):
+            patent.paragraph(numbered: key.number)?.text.count ?? 0
+        case .claim(let key):
+            patent.claim(numbered: key.number)?.fullText.count ?? 0
+        }
+    }
+
+    /// `characters` further into the text stream, walking pages as it runs off their ends.
+    private func advance(_ start: Candidate, by characters: Int, in document: PDFDocument)
+        -> Candidate
+    {
+        var page = start.page
+        var remaining = start.offset + characters
+        while page < document.pageCount {
+            let length = document.page(at: page)?.string?.utf16.count ?? 0
+            if remaining <= length { return Candidate(page: page, offset: remaining) }
+            remaining -= length
+            page += 1
+        }
+        let last = max(document.pageCount - 1, 0)
+        return Candidate(
+            page: last, offset: document.page(at: last)?.string?.utf16.count ?? 0)
+    }
+
     /// The nearest passage to this one that *was* found, in document order.
     ///
     /// The first of the three things that happen when a jump cannot land: the reader is put
