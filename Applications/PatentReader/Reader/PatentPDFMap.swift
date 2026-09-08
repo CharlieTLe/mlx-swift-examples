@@ -58,7 +58,44 @@ final class PatentPDFMap {
     /// feature has is *quiet*. A new document shape that drops to 60% looks, chip by chip,
     /// exactly like a few unlucky paragraphs. A number on screen turns it into something a
     /// reader can report.
-    private(set) var summary: String?
+    var summary: String? { report?.summary }
+
+    /// Everything the walk learned about itself, or `nil` until it finishes.
+    ///
+    /// Kept because `--anchor` prints it, and `--anchor` is how the 97% is re-measured on a
+    /// patent that is not one of this repository's four HTML fixtures — in particular on the
+    /// case the fixtures cannot cover at all, where the parse came from Google's HTML and
+    /// the PDF from `patentimages`, so the two can genuinely disagree. Without it the only
+    /// way to know whether anchoring works on a document is to click every chip.
+    private(set) var report: Report?
+
+    /// What the walk found. Every field is a number the plan this was built from measured,
+    /// so a regression is a diff rather than an impression.
+    struct Report: Sendable {
+        var totalParagraphs = 0
+        var totalClaims = 0
+        /// Long enough to anchor at all. See `PassageAnchors`.
+        var anchoredParagraphs = 0
+        var anchoredClaims = 0
+        /// Anchored, found, and ordered into place.
+        var placedParagraphs = 0
+        var placedClaims = 0
+        /// Anchors whose needle matched in two or more places. Expected to be *most* of
+        /// them — 242 of 437 on one probe, 820 of 1272 on another — which is the fact that
+        /// makes the ordering pass load-bearing rather than a refinement.
+        var ambiguous = 0
+        /// Placements the monotonic pass moved off the first match. 42% and 58% on the two
+        /// big probes: this is the number that says what the algorithm is worth.
+        var corrected = 0
+        /// Anchors whose primary needle found nothing and whose fallback was tried.
+        var fellBack = 0
+        var seconds: TimeInterval = 0
+
+        var summary: String {
+            "anchored \(placedParagraphs)/\(totalParagraphs) paragraphs · "
+                + "\(placedClaims)/\(totalClaims) claims"
+        }
+    }
 
     /// Anchor order — document order — so the nearest *placed* neighbour of a passage that
     /// could not be found is a walk outward from where it should have been.
@@ -81,10 +118,20 @@ final class PatentPDFMap {
     /// and a parameter added under pressure is a parameter added in the wrong place.
     func build(in document: PDFDocument, limitedTo slice: ClosedRange<Int>? = nil) async {
         guard !isBuilt else { return }
+        let started = Date()
 
         let anchors = PassageAnchors.anchors(in: patent)
         let range = slice.map { $0.clamped(to: 0 ... max(anchors.count - 1, 0)) }
         let wanted = range.map { Array(anchors[$0]) } ?? anchors
+
+        var report = Report(
+            totalParagraphs: patent.paragraphs.count, totalClaims: patent.claims.count)
+        for anchor in wanted {
+            switch anchor.target {
+            case .paragraph: report.anchoredParagraphs += 1
+            case .claim: report.anchoredClaims += 1
+            }
+        }
 
         var found: [[Candidate]] = []
         var selections: [[PDFSelection]] = []
@@ -105,7 +152,9 @@ final class PatentPDFMap {
             // typeset in a separate run is the case it exists for.
             if hits.isEmpty, let fallback = anchor.fallback {
                 hits = search(fallback, in: document)
+                if !hits.isEmpty { report.fellBack += 1 }
             }
+            if hits.count > 1 { report.ambiguous += 1 }
             selections.append(hits.map(\.selection))
             found.append(hits.map(\.candidate))
         }
@@ -124,9 +173,16 @@ final class PatentPDFMap {
                 unplaced.append(anchor.target)
                 continue
             }
+            if index > 0 { report.corrected += 1 }
+            switch anchor.target {
+            case .paragraph: report.placedParagraphs += 1
+            case .claim: report.placedClaims += 1
+            }
             placed[anchor.target] = selections[offset][index]
             ordinals.append((candidate, anchor.target))
         }
+
+        report.seconds = Date().timeIntervalSince(started)
 
         self.placed = placed
         self.unplaced = unplaced
@@ -134,7 +190,7 @@ final class PatentPDFMap {
         // binary search below rests on the sort rather than on a guarantee made elsewhere.
         self.ordinals = ordinals.sorted { $0.candidate < $1.candidate }
         self.order = wanted.map(\.target)
-        self.summary = Self.summary(placed: Set(placed.keys), in: patent)
+        self.report = report
         self.isBuilt = true
     }
 
@@ -156,19 +212,6 @@ final class PatentPDFMap {
                 guard range.location != NSNotFound else { return nil }
                 return (Candidate(page: index, offset: range.location), selection)
             }
-    }
-
-    private static func summary(placed: Set<CitationTarget>, in patent: Patent) -> String {
-        var paragraphs = 0
-        var claims = 0
-        for target in placed {
-            switch target {
-            case .paragraph: paragraphs += 1
-            case .claim: claims += 1
-            }
-        }
-        return "anchored \(paragraphs)/\(patent.paragraphs.count) paragraphs · "
-            + "\(claims)/\(patent.claims.count) claims"
     }
 
     // MARK: - Reading
@@ -242,5 +285,32 @@ final class PatentPDFMap {
         guard range.location != NSNotFound else { return nil }
         return Candidate(
             page: index, offset: first ? range.location : range.location + range.length)
+    }
+
+    /// Something inside one passage: the first occurrence of a string within that passage's
+    /// own span of the document.
+    ///
+    /// A reference numeral, and only that. Searching the whole document for `130` and taking
+    /// the first hit would answer a different question — the numeral appears in every figure
+    /// caption — and would quietly replace the pure "first paragraph that mentions it" rule
+    /// this app decided on with "first mention anywhere". Bracketing keeps that rule intact
+    /// and only sharpens where in the paragraph the reader lands.
+    ///
+    /// `nil` when the passage was never placed, or when the string is not in it after all,
+    /// in which case the caller lands on the passage — which is the older, coarser answer
+    /// and still a correct one.
+    func refine(_ needle: String, within target: CitationTarget, in document: PDFDocument)
+        -> PDFSelection?
+    {
+        guard let start = ordinals.firstIndex(where: { $0.target == target })
+        else { return nil }
+        let from = ordinals[start].candidate
+        let until = start + 1 < ordinals.count ? ordinals[start + 1].candidate : nil
+
+        return search(needle, in: document)
+            .first { hit in
+                hit.candidate >= from && (until.map { hit.candidate < $0 } ?? true)
+            }?
+            .selection
     }
 }

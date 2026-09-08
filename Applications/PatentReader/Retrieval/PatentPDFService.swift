@@ -228,6 +228,14 @@ final class PatentPDFService {
         return map
     }
 
+    /// The map for a patent if one has been made, and `nil` rather than a new one otherwise.
+    ///
+    /// The read-only counterpart, for the diagnostics that report on anchoring from outside
+    /// the reader. `map(for:)` cannot be used there: it mutates, and a status strip that
+    /// creates a map as a side effect of being drawn would both write state during a view
+    /// update and manufacture a map for a patent nobody has opened.
+    func anchored(_ key: PatentKey) -> PatentPDFMap? { maps[key] }
+
     // MARK: - Fetching
 
     /// Fetches the PDF if that is what this patent needs, and does nothing otherwise.

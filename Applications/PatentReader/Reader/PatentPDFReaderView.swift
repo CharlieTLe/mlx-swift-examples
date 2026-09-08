@@ -38,6 +38,9 @@ import SwiftUI
 struct PatentPDFReaderView: View {
     let patent: Patent
     let pdf: PatentPDFService
+    /// What the answer found, what it cited, and where the reader was last sent. Built by
+    /// `ContentView`, which is the only place that has all three.
+    let plan: HighlightPlan
     /// ⌘F and the two find affordances: switch to the reader text, then raise the bar.
     let onFindInText: () -> Void
 
@@ -53,21 +56,27 @@ struct PatentPDFReaderView: View {
     @State private var map: PatentPDFMap?
     @State private var marks = PatentPDFMarks()
 
+    /// What to say when a citation could not be landed on. See `band`.
+    @State private var band: String?
+
     var body: some View {
         Group {
             switch pdf.state(for: patent) {
             case .onDisk(let file):
                 if let document, let map, opened(document, is: file) {
-                    PatentPDFView(
-                        document: document, map: map, marks: marks,
-                        // Step by step: nothing is painted yet. The plan arrives from
-                        // `ContentView` with the answer that produced it.
-                        plan: .empty,
-                        isMapped: map.isBuilt,
-                        numbering: patent.numbering,
-                        page: Binding(
-                            get: { pdf.pages[patent.key] ?? 0 },
-                            set: { pdf.pages[patent.key] = $0 }))
+                    VStack(spacing: 0) {
+                        if let band {
+                            reportBand(band)
+                            Divider()
+                        }
+                        PatentPDFView(
+                            document: document, map: map, marks: marks, plan: plan,
+                            isMapped: map.isBuilt,
+                            numbering: patent.numbering,
+                            page: Binding(
+                                get: { pdf.pages[patent.key] ?? 0 },
+                                set: { pdf.pages[patent.key] = $0 }))
+                    }
                 } else {
                     // One frame, between the file being on disk and `.task` having opened
                     // it. Bare rather than captioned: a sentence that flashes for 16 ms is
@@ -110,6 +119,7 @@ struct PatentPDFReaderView: View {
         // tab up. `ensureDownloaded` is idempotent and does not retry a failure, so the
         // switching back and forth this invites costs nothing.
         .task(id: patent.key) { await open() }
+        .task(id: bandRequest) { await raiseBand() }
         .background { findShortcut }
     }
 
@@ -137,6 +147,81 @@ struct PatentPDFReaderView: View {
     /// made from, which is the only identity available across a view rebuild.
     private func opened(_ document: PDFDocument, is file: URL) -> Bool {
         document.documentURL?.standardizedFileURL == file.standardizedFileURL
+    }
+
+    // MARK: - When a citation cannot be landed on
+
+    /// What the band is a function of: which passage was asked for, and whether the map has
+    /// finished enough to know whether it is there.
+    ///
+    /// Both, because the two arrive in either order. A chip clicked on a patent that is
+    /// still being anchored has no verdict yet, and a map finishing has no news unless
+    /// somebody asked for something.
+    private struct BandRequest: Hashable {
+        let focus: UUID?
+        let isMapped: Bool
+    }
+
+    private var bandRequest: BandRequest {
+        BandRequest(focus: plan.focus?.id, isMapped: map?.isBuilt ?? false)
+    }
+
+    /// The second of the three ways a failed jump is reported — the other two being the
+    /// scroll to the nearest placed neighbour, which `PatentPDFView` does, and the third
+    /// line of `ContentView.citationTally`.
+    ///
+    /// **Reported and not hidden**, which is this app's standing rule and matters more here
+    /// than anywhere: a chip that appears to do nothing teaches the reader that the chips do
+    /// not work. A chip that says it landed one paragraph early teaches them exactly how far
+    /// to look.
+    ///
+    /// Transient because it is about a moment. The `.task(id:)` this runs in is cancelled
+    /// and restarted by the next jump, so a band never outlives the jump that raised it.
+    private func raiseBand() async {
+        band = nil
+        guard let map, map.isBuilt, let focus = plan.focus,
+            map.selection(for: focus.target) == nil
+        else { return }
+
+        let label = Citation.chipLabel(focus.target, numbering: patent.numbering)
+        let opening =
+            "\(label) is in this patent, but it could not be found in the office's PDF."
+        if let near = map.nearestPlaced(to: focus.target) {
+            band =
+                opening + " The nearest passage that could is "
+                + "\(Citation.chipLabel(near, numbering: patent.numbering))."
+        } else {
+            band = opening
+        }
+
+        try? await Task.sleep(for: .seconds(8))
+        band = nil
+    }
+
+    /// The band itself, in the same voice as `report(_:_:_:)` below and a quarter of the
+    /// height: this one appears over a document the reader is already reading.
+    @ViewBuilder
+    private func reportBand(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "questionmark.circle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+            Button { band = nil } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.4))
     }
 
     /// "Nothing to show you, and here is why", in `ContentView.emptyState`'s furniture so
@@ -224,6 +309,10 @@ struct PatentPDFView {
         /// current one rather than the one captured when the view was made.
         var onPageChange: (Int) -> Void = { _ in }
 
+        /// The last jump acted on. Identity and not the target, because clicking the same
+        /// chip twice has to move twice — the reason `PassageFocus` carries a `UUID` at all.
+        var lastFocus: UUID?
+
         /// `nonisolated(unsafe)` so that `deinit`, which is not main-actor isolated, can
         /// hand the token back. It is written once on the main actor while the view is
         /// alive and read once when nothing else holds this object, which is the whole of
@@ -272,14 +361,55 @@ struct PatentPDFView {
 
     private func update(_ view: PDFView, _ coordinator: Coordinator) {
         bind(coordinator)
-        if view.document !== document { load(into: view) }
-        if isMapped {
-            marks.apply(
-                plan, from: map, numbering: numbering, to: document, redrawing: view)
+        if view.document !== document {
+            load(into: view)
+            // A reload is a new set of pages, so a jump made against the old ones has to be
+            // made again.
+            coordinator.lastFocus = nil
         }
-        guard let current = view.currentPage, document.index(for: current) != page
+        // The remembered page is reconciled **before** the jump, deliberately. A jump moves
+        // the view and `.PDFViewPageChanged` catches `page` up a turn later, so reconciling
+        // afterwards would read a stale `page` and scroll straight back to where the reader
+        // was — a chip that appears to work and then undoes itself.
+        if let current = view.currentPage, document.index(for: current) != page {
+            go(to: page, in: view)
+        }
+        guard isMapped else { return }
+        marks.apply(plan, from: map, numbering: numbering, to: document, redrawing: view)
+        jump(in: view, coordinator)
+    }
+
+    /// The jump. This is the interaction the whole app is for, at the end of its journey:
+    /// a chip in the answer pane, through a paragraph number, an anchor and a placement, to
+    /// a scroll of the document the office published.
+    ///
+    /// **Scrolls without selecting.** `go(to: PDFSelection)` moves the view and leaves
+    /// `currentSelection` alone, which is what keeps the three channels apart — a jump must
+    /// not scope the reader's next question, exactly as a find hit must not.
+    ///
+    /// When the passage could not be placed the reader is put on the nearest one that was,
+    /// and `PatentPDFReaderView.raiseBand` says so. Landing next door and being told is a
+    /// far better answer than a chip that does nothing.
+    private func jump(in view: PDFView, _ coordinator: Coordinator) {
+        guard let focus = plan.focus, coordinator.lastFocus != focus.id else { return }
+        coordinator.lastFocus = focus.id
+
+        // Inside the passage where a refinement asks for it and it is there; on the passage
+        // otherwise, which is the coarser answer and still a correct one.
+        if let refinement = focus.refinement,
+            let narrowed = map.refine(refinement, within: focus.target, in: document)
+        {
+            view.go(to: narrowed)
+            return
+        }
+        if let selection = map.selection(for: focus.target) {
+            view.go(to: selection)
+            return
+        }
+        guard let near = map.nearestPlaced(to: focus.target),
+            let selection = map.selection(for: near)
         else { return }
-        go(to: page, in: view)
+        view.go(to: selection)
     }
 
     /// Points the coordinator at *this* instance's binding, on every update, so the page

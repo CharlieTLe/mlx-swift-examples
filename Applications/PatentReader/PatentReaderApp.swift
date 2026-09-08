@@ -44,6 +44,9 @@ struct AppOptions: Sendable {
     /// **live** parse — `--selftest` reads checked-in fixtures, so it cannot see markup
     /// that changed today.
     var fetch: [String] = []
+    /// Anchor these numbers' stored PDFs and print how well it went, then exit. The probe
+    /// harness for the one thing `--selftest` cannot reach — see `LibraryCommands.anchor`.
+    var anchor: [String] = []
     /// Questions for `--show-prompt` and `--benchmark`. Empty means the built-in sample.
     var questions: [String] = []
     /// A paragraph or claim to print, for checking the citation resolver from a
@@ -66,7 +69,7 @@ struct AppOptions: Sendable {
             case "--embedder": options.embedderID = rest.next()
             case "--patent": options.patents.append(rest.next() ?? "")
             case "--fetch": options.fetch.append(rest.next() ?? "")
-            case "--ask": options.questions.append(rest.next() ?? "")
+            case "--anchor": options.anchor.append(rest.next() ?? "")            case "--ask": options.questions.append(rest.next() ?? "")
             case "--paragraph": options.paragraph = rest.next().flatMap(Int.init)
             case "--claim": options.claim = rest.next().flatMap(Int.init)
             default: break
@@ -135,7 +138,7 @@ enum EntryPoint {
             // Same `dispatchMain()` shape as the two below and for the same reason —
             // blocking the main thread on a semaphore would deadlock against the
             // main-actor executor.
-            if !options.fetch.isEmpty || options.showsPassage {
+            if !options.fetch.isEmpty || options.showsPassage || !options.anchor.isEmpty {
                 Task {
                     var ok = true
                     if !options.fetch.isEmpty {
@@ -143,6 +146,9 @@ enum EntryPoint {
                     }
                     if ok, options.showsPassage {
                         ok = LibraryCommands.show(options)
+                    }
+                    if ok, !options.anchor.isEmpty {
+                        ok = await LibraryCommands.anchor(options.anchor)
                     }
                     exit(ok ? 0 : 1)
                 }

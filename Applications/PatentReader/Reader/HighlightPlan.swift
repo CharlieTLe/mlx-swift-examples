@@ -33,10 +33,23 @@ enum HighlightRole: Int, Comparable, Hashable, Sendable {
 /// the second time, and the reader would click and watch nothing happen.
 struct PassageFocus: Equatable, Sendable {
     let target: CitationTarget
+
+    /// Something to land on *inside* the passage, or `nil` to land on the passage.
+    ///
+    /// One caller: a reference numeral. Clicking `130` in an answer means "show me where the
+    /// internal matrix is introduced", and the app's answer to that is the first paragraph
+    /// mentioning it — but a paragraph is a dozen lines, and putting the reader on the
+    /// paragraph leaves them to find the numeral by eye. Narrowing inside the passage's own
+    /// bracket, rather than searching the document for `130` and taking the first hit, is
+    /// what keeps the pure "first paragraph that mentions it" rule as the thing being
+    /// answered.
+    let refinement: String?
+
     let id: UUID
 
-    init(_ target: CitationTarget) {
+    init(_ target: CitationTarget, refining refinement: String? = nil) {
         self.target = target
+        self.refinement = refinement
         self.id = UUID()
     }
 }
@@ -114,7 +127,11 @@ struct HighlightPlan: Equatable, Sendable {
     }
 
     /// `Chunker`'s synthetic title-and-abstract address.
-    private static func isFrontMatter(_ target: CitationTarget) -> Bool {
+    ///
+    /// Not private: the diagnostics that report on what could not be located have to make
+    /// the same exclusion, and "the abstract could not be found in the PDF" would be a
+    /// failure the app invented for itself.
+    static func isFrontMatter(_ target: CitationTarget) -> Bool {
         if case .paragraph(let key) = target { return key.number == 0 }
         return false
     }

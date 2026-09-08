@@ -1,6 +1,7 @@
 // Copyright © 2026 Apple Inc.
 
 import Foundation
+import PDFKit
 
 /// The terminal commands that touch the library rather than the model.
 ///
@@ -146,5 +147,93 @@ enum LibraryCommands {
             print("as embedded: \(Chunker.resolvedText(of: claim, in: patent).prefix(300))…")
         }
         return true
+    }
+
+    /// `--anchor US10123456B2`, repeatable.
+    ///
+    /// **The probe harness, in the app.** It opens the stored `.source.pdf`, runs the real
+    /// anchoring against it, and prints what happened.
+    ///
+    /// This exists because of a gap in the evidence the whole feature rests on, and the gap
+    /// is worth stating rather than working around. `--selftest` is PDFKit-free by policy and
+    /// there is no PDF fixture in this repository, so everything the self test can assert
+    /// about anchoring stops at the needle. The measurements that decided the design — 97% of
+    /// paragraphs located, ambiguity the norm, the ordering pass changing 42–58% of
+    /// placements — were all taken against PDF-*imported* patents, where the parse and the
+    /// PDF are the same document.
+    ///
+    /// The case nobody has measured is the common one: a patent fetched by number, whose text
+    /// came from Google's HTML and whose PDF came from `patentimages`. Those two can differ —
+    /// US10123456B2 claim 5 reads "wherein fon ling the internal matrix" in Google's OCR — and
+    /// a needle taken from one and looked for in the other is exactly where this would fail.
+    /// This is how anyone checks, on any patent in any library, without a network, a model or
+    /// a checked-in fixture.
+    static func anchor(_ numbers: [String]) async -> Bool {
+        let library = LibraryService()
+        library.load()
+
+        var ok = true
+        for spelling in numbers {
+            guard let requested = PatentNumberParser.parse(spelling) else {
+                print("\(spelling): not a patent number")
+                ok = false
+                continue
+            }
+            guard
+                let patent = library.patents.first(where: {
+                    $0.key.country == requested.country && $0.key.serial == requested.serial
+                })
+            else {
+                print("\(requested.display) is not in the library — fetch it first")
+                ok = false
+                continue
+            }
+            guard case .onDisk(let file) = library.pdf.state(for: patent) else {
+                print(
+                    "\(patent.key.display): no PDF on disk — open it in the reader once, or "
+                        + "import the file")
+                ok = false
+                continue
+            }
+            guard let document = PDFDocument(url: file) else {
+                print("\(patent.key.display): PDFKit could not open \(file.lastPathComponent)")
+                ok = false
+                continue
+            }
+
+            let map = PatentPDFMap(patent: patent)
+            await map.build(in: document)
+            guard let report = map.report else {
+                print("\(patent.key.display): the walk was cancelled")
+                ok = false
+                continue
+            }
+
+            print("\(patent.key.display) — \(document.pageCount) pages")
+            print(
+                "  placed \(report.placedParagraphs)/\(report.totalParagraphs) paragraphs · "
+                    + "claims \(report.placedClaims)/\(report.totalClaims) · "
+                    + "ambiguous \(report.ambiguous) · monotonic changed \(report.corrected)")
+            let unanchorable =
+                (report.totalParagraphs - report.anchoredParagraphs)
+                + (report.totalClaims - report.anchoredClaims)
+            print(
+                String(
+                    format: "  %d too short to anchor · %d fell back · %.2fs",
+                    unanchorable, report.fellBack, report.seconds))
+            if !map.unplaced.isEmpty {
+                // Named rather than counted, and capped rather than truncated silently: the
+                // interesting question about a miss is always *which* one, because a run of
+                // consecutive misses is a different bug from a scattering of them.
+                let named = map.unplaced.prefix(20).map {
+                    Citation.chipLabel($0, numbering: patent.numbering)
+                }
+                print(
+                    "  not found: " + named.joined(separator: ", ")
+                        + (map.unplaced.count > 20
+                            ? " … and \(map.unplaced.count - 20) more" : ""))
+            }
+        }
+        return ok
     }
 }

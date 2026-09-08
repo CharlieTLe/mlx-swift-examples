@@ -19,6 +19,14 @@ struct ContentView: View {
     @State private var scrollTarget: Int?
     @State private var flash: FlashHighlight?
 
+    /// Which passage the reader was last sent to, and why.
+    ///
+    /// The PDF's counterpart to `scrollTarget` and `flash` together: it is both the scroll
+    /// and the accent mark, because on the original those are one thing — a highlight the
+    /// view is scrolled to. Carries a fresh identity per jump so clicking the same chip
+    /// twice moves twice; see `PassageFocus`.
+    @State private var focus: PassageFocus?
+
     /// Where the reader has been, so a citation jump can be undone. See
     /// `NavigationHistory`; ⌘[ and ⌘] drive it.
     @State private var history = NavigationHistory()
@@ -293,6 +301,25 @@ struct ContentView: View {
 
     private var rows: [DocumentRow] { patent?.rows ?? [] }
 
+    /// What the open document should have painted on it: the passages retrieval put in the
+    /// prompt, the ones the answer cited, and the one the reader was last sent to.
+    ///
+    /// Assembled here because this is the only place that holds all three. Everything about
+    /// *which* passages qualify lives in `HighlightPlan.make`, which is pure and asserted —
+    /// in particular the three exclusions, which are the part a view body would get wrong.
+    ///
+    /// The transcript's runs go in beside the current answer's: a reader three follow-ups
+    /// deep is still reading one conversation, and the passages the earlier turns cited are
+    /// still the evidence on the page.
+    private var highlightPlan: HighlightPlan {
+        guard let openPatent else { return .empty }
+        return HighlightPlan.make(
+            for: openPatent,
+            retrieved: retrieved.map(\.chunk.target),
+            runs: runs + transcript.flatMap(\.runs),
+            focus: focus)
+    }
+
     // MARK: - Panes
 
     @ViewBuilder
@@ -348,7 +375,7 @@ struct ContentView: View {
                         )
                     case .original:
                         PatentPDFReaderView(
-                            patent: patent, pdf: library.pdf,
+                            patent: patent, pdf: library.pdf, plan: highlightPlan,
                             onFindInText: {
                                 aimAtText()
                                 findRequest += 1
@@ -802,6 +829,12 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                         .textSelection(.enabled)
                 }
+                if let line = anchorLine {
+                    Text(line)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                }
 
                 if !unsupportedQuotes.isEmpty {
                     // Reported, never corrected. A quotation none of the retrieved
@@ -858,6 +891,45 @@ struct ContentView: View {
                 .foregroundStyle(.red)
                 .textSelection(.enabled)
         }
+        if !unlocatable.isEmpty {
+            Text("cited and not found in the PDF: " + unlocatable.joined(separator: ", "))
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .textSelection(.enabled)
+        }
+    }
+
+    /// Citations that check out and that the reader still cannot be taken to.
+    ///
+    /// The third line of the tally, and **deliberately not a `CitationCheck.Verdict`.** The
+    /// verdicts are model-free, PDFKit-free and decided at commit time inside
+    /// `CitationScanner`, and a fourth case that depended on a document being open — and on
+    /// a map having finished walking it — would break all three of those at once. A chip
+    /// whose paragraph exists and was retrieved is a good citation whatever this app can do
+    /// with a PDF; that it cannot land on it is a fact about the app, and it is reported as
+    /// one, here, beside the other things the app admits to.
+    private var unlocatable: [String] {
+        guard let openPatent, let map = library.pdf.anchored(openPatent), map.isBuilt
+        else { return [] }
+        var seen: Set<String> = []
+        return (runs + transcript.flatMap(\.runs)).compactMap { run in
+            guard case .citation(let citation) = run, citation.verdict == .supported,
+                citation.target.patent == openPatent,
+                !HighlightPlan.isFrontMatter(citation.target),
+                map.selection(for: citation.target) == nil,
+                seen.insert(citation.literal).inserted
+            else { return nil }
+            return citation.literal
+        }
+    }
+
+    /// `anchored 428/437 paragraphs · 106/120 claims`, for the open document.
+    ///
+    /// One line, and it is the alarm for the whole feature. Anchoring fails *quietly*: a
+    /// document shape that drops to 60% looks, chip by chip, exactly like a handful of
+    /// unlucky paragraphs, and there is no other place in the app where the rate is visible.
+    private var anchorLine: String? {
+        openPatent.flatMap { library.pdf.anchored($0)?.summary }
     }
 
     /// What retrieval found and by which leg, which is how a retrieval regression gets
@@ -902,6 +974,7 @@ struct ContentView: View {
         }
         openPatent = key
         selection = nil
+        focus = nil
     }
 
     /// Brings the reader on screen, at the width where it is not already.
@@ -956,6 +1029,7 @@ struct ContentView: View {
             history.push(NavigationHistory.Position(patent: current, row: head))
         }
 
+        focus = PassageFocus(target)
         guard let row = rowIndex(of: target, in: destination) else { return }
         // Written directly rather than through `DocumentReaderView.select(_:)`. That
         // function requests keyboard focus, which would take it from wherever the reader
@@ -1015,6 +1089,12 @@ struct ContentView: View {
         selection = PassageSelection(at: row.index)
         scrollTarget = row.index
         flash = FlashHighlight(row: row.index)
+        // The same paragraph, and then the numeral inside it. The search above stays exactly
+        // what it was — a pure fact about the parsed text — and the refinement only decides
+        // where in that paragraph the original scrolls to. See `PassageFocus.refinement`.
+        if let target = row.target(in: patent.key) {
+            focus = PassageFocus(target, refining: token)
+        }
     }
 
     /// `[0042]` or `claim 7` typed into the library's find field.
@@ -1048,6 +1128,27 @@ struct ContentView: View {
         guard let row else { return }
         revealReader()
         scrollTarget = row.index
+        // The original has no heading rows to scroll to, so a section is aimed at through
+        // its **first passage** — claim 1 for the Claims sentinel. The heading is one line
+        // above it, so the reader lands with it on screen, and the passage inherits the
+        // monotonic placement instead of needing a second, separately-bracketed kind of
+        // anchor whose failures would have their own rate to measure.
+        if let target = firstPassage(ofSection: index, in: patent) {
+            focus = PassageFocus(target)
+        }
+    }
+
+    /// The first thing under a heading that a citation could name.
+    private func firstPassage(ofSection index: Int, in patent: Patent) -> CitationTarget? {
+        if index == LibraryOutline.claimsSection {
+            return patent.claims.first.map {
+                .claim(ClaimKey(patent: patent.key, number: $0.number))
+            }
+        }
+        guard patent.sections.indices.contains(index),
+            let paragraph = patent.sections[index].paragraphs.first
+        else { return nil }
+        return .paragraph(ParagraphKey(patent: patent.key, number: paragraph.number))
     }
 
     private func goBack() {
@@ -1070,6 +1171,16 @@ struct ContentView: View {
         selection = position.row.map(PassageSelection.init(at:))
         scrollTarget = position.row
         if let row = position.row { flash = FlashHighlight(row: row) }
+        // A row index, converted. `NavigationHistory.Position` still records where the
+        // reader was as a row because the text reader is still here to put them back on
+        // one; it becomes a `CitationTarget` outright when that goes.
+        focus =
+            position.row
+            .flatMap { row in
+                library.store.patent(position.patent)?.rows.first { $0.index == row }
+            }
+            .flatMap { $0.target(in: position.patent) }
+            .map { PassageFocus($0) }
     }
 
     private func recordProgress() {
