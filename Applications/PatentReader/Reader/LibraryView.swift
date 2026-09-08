@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// open one nested underneath.
 ///
 /// `NavigatorView`'s skeleton — hand-rolled search field, `Divider`, `List(selection:)`,
-/// `ScrollViewReader` putting the open row on screen next turn, ⌘F on a zero-opacity
+/// `ScrollViewReader` putting the open row on screen next turn, ⌥⌘F on a zero-opacity
 /// button — with the play/act/scene accordion replaced by patent/section.
 ///
 /// The accordion survives and its argument transfers unchanged: a patent runs to a few
@@ -43,10 +43,16 @@ struct LibraryView: View {
             list
         }
         .background {
-            // ⌘F, needing a control to hang off. Zero-opacity rather than `.hidden()`,
+            // ⌥⌘F, needing a control to hang off. Zero-opacity rather than `.hidden()`,
             // which removes it from the hierarchy along with its shortcut.
-            Button("Find a patent") { isQueryFocused = true }
-                .keyboardShortcut("f", modifiers: .command)
+            //
+            // **⌘F belongs to the document.** This field was the app's only find field and
+            // took the plain shortcut by default; now that `DocumentReaderView` can search
+            // the patent's own words, ⌘F means there what it means everywhere else — find in
+            // what I am reading — and filtering the library, which is a different question
+            // about different things, takes the modified one.
+            Button("Filter the library") { isQueryFocused = true }
+                .keyboardShortcut("f", modifiers: [.command, .option])
                 .opacity(0)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)

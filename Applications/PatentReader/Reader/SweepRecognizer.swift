@@ -66,10 +66,19 @@
                 // `location(in:)` on a scroll view is in content coordinates, since its
                 // bounds origin *is* the content offset. `rowFrames` is measured in the
                 // named space declared on the `ScrollView`, which is the viewport.
+                //
+                // **The adjusted inset is the third term and it was missing.** The content
+                // offset at rest is not zero but minus the top inset the navigation bar and
+                // safe area contribute, so subtracting the offset alone left every point
+                // about an inset too far down the document — pressing the number `5` armed
+                // the sweep on row 7, a drift that reads as sloppiness rather than as the
+                // off-by-one-coordinate-system it is. Measured at ~136pt on an iPhone 17,
+                // which is exactly this inset.
                 let inContent = recognizer.location(in: scrollView)
+                let inset = scrollView.adjustedContentInset
                 let point = CGPoint(
-                    x: inContent.x - scrollView.contentOffset.x,
-                    y: inContent.y - scrollView.contentOffset.y)
+                    x: inContent.x - scrollView.contentOffset.x - inset.left,
+                    y: inContent.y - scrollView.contentOffset.y - inset.top)
 
                 switch recognizer.state {
                 case .began: onBegan?(point)

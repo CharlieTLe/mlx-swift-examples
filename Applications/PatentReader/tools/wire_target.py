@@ -93,7 +93,12 @@ def strip(text):
     for marker in ids + [PRODUCT]:
         text = re.sub(r"^\t+" + marker + r" /\*[^\n]*?\*/,\n", "", text, flags=re.M)
         text = re.sub(marker + r" /\*[^\n]*?\*/, ", "", text)
-    text = text.replace(", PatentReader/Resources/Fixtures, ", ", ")
+    # The explicit folder, wherever it sits in the list. Xcode rewrites this line when
+    # the project is opened and sorts the folder to the front, so a pattern that assumed
+    # it followed ShakespeareReader's matched nothing on a second run — and the *insert*
+    # below then found no anchor either, leaving the target with no files and a link that
+    # failed on `_main`. Matching the entry alone is what makes this survive Xcode.
+    text = text.replace("PatentReader/Resources/Fixtures, ", "")
     return text
 
 
@@ -131,13 +136,17 @@ def main():
         "\t\t\tmembershipExceptions = (\n" + listing + "\t\t\t);\n"
         f"\t\t\ttarget = {TARGET} /* PatentReader */;\n\t\t}};\n")
 
+    # Two independent edits to the Applications group's one line, and independent is the
+    # point: registering the exception set is what gives the target its files, and it must
+    # not be conditional on where Xcode last sorted `explicitFolders`.
     text = text.replace(
-        "E5B2D1AF0000000000000A09 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); "
-        "explicitFileTypes = {}; explicitFolders = (ShakespeareReader/Resources/Plays, );",
+        "E5B2D1AF0000000000000A09 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, );",
         "E5B2D1AF0000000000000A09 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, "
-        f"{EXCEPTIONS} /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); "
-        "explicitFileTypes = {}; explicitFolders = (ShakespeareReader/Resources/Plays, "
-        "PatentReader/Resources/Fixtures, );")
+        f"{EXCEPTIONS} /* PBXFileSystemSynchronizedBuildFileExceptionSet */, );")
+    text = text.replace(
+        "explicitFolders = (ShakespeareReader/Resources/Plays, );",
+        "explicitFolders = (PatentReader/Resources/Fixtures, "
+        "ShakespeareReader/Resources/Plays, );")
 
     # 3. Three empty build phases. Empty on purpose: a synchronized group supplies the
     #    files, and the package products link from `packageProductDependencies`.

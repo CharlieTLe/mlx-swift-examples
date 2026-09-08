@@ -24,8 +24,19 @@ import SwiftUI
 /// from a preference and read **only** inside the drag gesture in
 /// `DocumentReaderView.row(_:)`, never in `body`, so a font change is a one-shot relayout
 /// that settles.
+///
+/// **The row has two selections in it, and the margin is the boundary between them.** The
+/// prose is system-selectable text, so a drag or a long press on it selects *characters*. The
+/// number margin is not prose — a paragraph number can never be part of a quotation — so a
+/// press there means "this row", and that is what `DocumentReaderView` arms a passage sweep
+/// from. Getting this wrong is not subtle: with the sweep armed from anywhere, one long press
+/// on a phone produced grab handles and a five-row selection band at the same time.
 @MainActor
 struct DocumentRowView: View {
+    /// The row's own horizontal inset, shared because `DocumentReaderView` has to know where
+    /// the number margin ends in order to tell a passage sweep from a text selection.
+    static let rowPadding: CGFloat = 6
+
     let row: DocumentRow
     let patent: Patent
 
@@ -35,6 +46,15 @@ struct DocumentRowView: View {
     let spans: [PatentMarkup.Span]
 
     let isSelected: Bool
+
+    /// The find hits in this row, and which of them the reader is on.
+    ///
+    /// Bound by the same size-neutrality contract as everything else here, and it keeps to
+    /// it the same way the flash does — by changing nothing that has a size. A hit is drawn
+    /// as an attributed run's `backgroundColor`, which fills the run's existing box; a
+    /// heavier weight or a box drawn behind the text with padding would make row height
+    /// depend on the query and close the layout loop on every keystroke.
+    let highlights: DocumentFind.Highlights
 
     /// Whether the reader pane holds the keyboard. Focus stays in the library when a
     /// patent is picked there, so the band goes grey to say the arrows are pointed
@@ -105,7 +125,7 @@ struct DocumentRowView: View {
             content
         }
         .padding(.vertical, 2)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, Self.rowPadding)
         .padding(.top, topGap)
         .background(alignment: .leading) {
             if isSelected {
@@ -148,57 +168,67 @@ struct DocumentRowView: View {
     private var content: some View {
         switch row.kind {
         case .heading(let text), .claimsHeading(let text):
-            Text(text)
-                .font(typeface.sectionHeading)
-                .tracking(typeface.sectionTracking)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // `MarkedText` rather than a bare `Text` only so a find hit in a heading is
+            // visible. It short-circuits to `Text(text)` with nothing to say about a run, so
+            // an ordinary heading takes the identical path it did before.
+            MarkedText(
+                text: text, spans: [], marked: nil, highlights: highlights,
+                typeface: typeface
+            )
+            .font(typeface.sectionHeading)
+            .tracking(typeface.sectionTracking)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .paragraph:
             paragraphText
         case .claim(let claim):
             ClaimRowView(
-                claim: claim, patent: patent, spans: spans, depth: row.claimDepth,
-                onOpen: onOpen)
+                claim: claim, patent: patent, spans: spans, highlights: highlights,
+                depth: row.claimDepth, onOpen: onOpen)
         }
     }
 
     /// A specification paragraph, with its spans set and the hovered word underlined.
     @ViewBuilder
     private var paragraphText: some View {
-        MarkedText(text: row.plainText, spans: spans, marked: marked, typeface: typeface)
-            .font(typeface.body)
-            .foregroundStyle(.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                GeometryReader { geometry in
-                    Color.clear
-                        .onAppear {
-                            textFrame.rect = geometry.frame(
-                                in: .named(DictionaryAnchor.space))
-                        }
-                        .onChange(of: geometry.frame(in: .named(DictionaryAnchor.space))) {
-                            _, frame in
-                            textFrame.rect = frame
-                        }
+        MarkedText(
+            text: row.plainText, spans: spans, marked: marked, highlights: highlights,
+            typeface: typeface
+        )
+        .selectableProse()
+        .font(typeface.body)
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear {
+                        textFrame.rect = geometry.frame(
+                            in: .named(DictionaryAnchor.space))
+                    }
+                    .onChange(of: geometry.frame(in: .named(DictionaryAnchor.space))) {
+                        _, frame in
+                        textFrame.rect = frame
+                    }
+            }
+        }
+        // macOS only, both of them, and for different reasons. Hover is a pointer
+        // event a phone does not have; the menu is a *long press* there, which is
+        // already how `SweepRecognizer` arms a sweep — the app's primary touch
+        // interaction — so wiring word lookup up on iOS is a separate question about
+        // which gesture wins, not a matter of dropping these in.
+        #if os(macOS)
+            .onContinuousHover(coordinateSpace: .named(DictionaryAnchor.space)) { phase in
+                switch phase {
+                case .active(let point):
+                    let resolved = resolvedWord(at: point)
+                    if resolved != marked { marked = resolved }
+                case .ended:
+                    if marked != nil { marked = nil }
                 }
             }
-            // macOS only, both of them, and for different reasons. Hover is a pointer
-            // event a phone does not have; the menu is a *long press* there, which is
-            // already how `SweepRecognizer` arms a sweep — the app's primary touch
-            // interaction — so wiring word lookup up on iOS is a separate question about
-            // which gesture wins, not a matter of dropping these in.
-            #if os(macOS)
-                .onContinuousHover(coordinateSpace: .named(DictionaryAnchor.space)) { phase in
-                    switch phase {
-                    case .active(let point):
-                        let resolved = resolvedWord(at: point)
-                        if resolved != marked { marked = resolved }
-                    case .ended:
-                        if marked != nil { marked = nil }
-                    }
-                }
-                .contextMenu { wordMenu }
-            #endif
+            .contextMenu { wordMenu }
+        #endif
     }
 
     // MARK: - The margin
@@ -306,29 +336,64 @@ struct DocumentRowView: View {
     }
 }
 
-/// Text with its markup spans set and the hovered word underlined.
+/// Text with its markup spans set, the find hits lit, and the hovered word underlined.
 ///
 /// Split out of the row because a claim needs it too, at three indent levels.
 ///
-/// An `AttributedString` is built **only** when there is something to say about a run:
-/// with no spans and nothing hovered this is `Text(text)` on the identical code path a
-/// plain paragraph would take. Same move `ReaderTextSize` makes by short-circuiting to
-/// the bare text style at `.default` — the common case stays what it is rather than
+/// **The text is system-selectable**, so a reader can drag out a phrase and copy exactly
+/// that. That was not always true, and what changed is worth recording: the row-based
+/// `PassageSelection` exists because SwiftUI will not tell the app which characters are
+/// selected, and for a while the conclusion drawn from that was that character selection
+/// should be off entirely so the two could not be confused. That was the wrong conclusion.
+/// A reader quoting a patent into an email wants the clause, not the paragraph, and the app
+/// not being *told* about a selection is no reason to deny the reader one — it only means
+/// the app cannot build a citation from it, which is what ⇧⌘C and the passage selection are
+/// still for.
+///
+/// An `AttributedString` is built **only** when there is something to say about a run: with
+/// no spans, nothing hovered and nothing found this is `Text(text)` on the identical code
+/// path a plain paragraph would take. Same move `ReaderTextSize` makes by short-circuiting
+/// to the bare text style at `.default` — the common case stays what it is rather than
 /// becoming something equivalent to it.
+/// **Selectability is the caller's to grant, and `Text` is not selectable by default**, which
+/// is why this applies no `.textSelection` of its own. The prose says `.enabled`; a *heading*
+/// deliberately does not, and that is not fussiness. A heading's job in this app is to be a
+/// handle — double-clicking one takes the heading and every row under it, which is how a
+/// reader scopes a question to the Background — and a selectable heading loses that, because
+/// the text view swallows the double click to select a word. Headings are also the one thing
+/// here that cannot be quoted: `DocumentRow.target(in:)` gives them no citation.
 @MainActor
 struct MarkedText: View {
     let text: String
     let spans: [PatentMarkup.Span]
     let marked: Range<String.Index>?
+    let highlights: DocumentFind.Highlights
     let typeface: ReaderTypeface
+
+    /// Every hit in the row, and the one the reader is on.
+    ///
+    /// **Deliberately not the accent colour**, which is the obvious choice and the wrong
+    /// one: the selection band, the landing flash, the reference numerals and the claim
+    /// cross-references are all accent-tinted already, so an accent-tinted find hit would be
+    /// the fifth thing wearing the same colour and the first one a reader has to tell apart
+    /// from the other four. Yellow is what every find field in every app has meant since
+    /// before this one existed, and spending the convention here costs nothing.
+    ///
+    /// Two weights rather than one, because the count in the bar is only half the answer:
+    /// `3 of 47` says how many there are, and the darker fill says which of them you are
+    /// looking at. The text keeps its own colour under both — a foreground change would make
+    /// a hit inside a reference numeral lose the tint that says it is a numeral.
+    private static let hit = Color.yellow.opacity(0.30)
+    private static let currentHit = Color.orange.opacity(0.55)
 
     var body: some View {
         Text(attributed)
-            .textSelection(.disabled)
     }
 
     private var attributed: AttributedString {
-        guard marked != nil || !spans.isEmpty else { return AttributedString(text) }
+        guard marked != nil || !spans.isEmpty || !highlights.isEmpty else {
+            return AttributedString(text)
+        }
 
         var string = AttributedString(text)
         for span in spans {
@@ -355,12 +420,21 @@ struct MarkedText: View {
             }
         }
 
+        // After the spans, so a hit inside a reference numeral is drawn behind the numeral
+        // rather than instead of it — the two are a background and a foreground and both
+        // facts survive.
+        for hit in highlights.ranges {
+            guard let range = attributedRange(hit, in: string) else { continue }
+            string[range].backgroundColor =
+                hit == highlights.current ? Self.currentHit : Self.hit
+        }
+
         if let marked,
             let lower = AttributedString.Index(marked.lowerBound, within: string),
             let upper = AttributedString.Index(marked.upperBound, within: string)
         {
-            // An underline rather than a background fill, so the mark does not compete
-            // with the selection band, which is already a fill.
+            // An underline rather than a background fill, so the mark does not compete with
+            // the selection band, which is already a fill.
             string[lower ..< upper].underlineStyle = Text.LineStyle.single
         }
         return string

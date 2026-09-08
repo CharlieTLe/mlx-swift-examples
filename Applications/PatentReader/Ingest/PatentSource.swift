@@ -42,6 +42,7 @@ struct GooglePatentsSource: PatentSource {
         case badNumber(PatentKey)
         case notFound(PatentKey, status: Int)
         case notText
+        case notPDF(host: String)
 
         var errorDescription: String? {
             switch self {
@@ -55,13 +56,22 @@ struct GooglePatentsSource: PatentSource {
             case .notText:
                 "The response was not text. That usually means a network appliance "
                     + "returned a captcha or an error page instead of the patent."
+            case .notPDF(let host):
+                "The response from \(host) did not begin with %PDF-, so it is not a PDF. "
+                    + "That usually means a captcha, an error page, or a document that "
+                    + "has moved, rather than the file itself."
             }
         }
     }
 
-    func fetch(_ number: PatentKey) async throws -> Patent {
-        guard let url = Self.url(for: number) else { throw Failure.badNumber(number) }
-
+    /// The one request this source makes, however it is made.
+    ///
+    /// Factored out at the third caller, and the second one is the reason: `fetchSource`
+    /// had been quietly missing `timeoutInterval`, so a stalled connection there hung on
+    /// `URLSession`'s 60-second default while `fetch` next door gave up at 30. That is
+    /// exactly what three hand-written copies of a request produce — they agree on the
+    /// part that is visible in a diff and drift on the part that is not.
+    private static func request(_ url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         // The default `URLSession` user agent is the bundle id, which reads as anonymous
         // traffic. Naming the app is the courteous thing to do and makes this app's
@@ -71,8 +81,13 @@ struct GooglePatentsSource: PatentSource {
             "PatentReader/1.0 (mlx-swift-examples; on-device patent reader)",
             forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
+        return request
+    }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+    func fetch(_ number: PatentKey) async throws -> Patent {
+        guard let url = Self.url(for: number) else { throw Failure.badNumber(number) }
+
+        let (data, response) = try await URLSession.shared.data(for: Self.request(url))
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             throw Failure.notFound(number, status: http.statusCode)
         }
@@ -84,20 +99,40 @@ struct GooglePatentsSource: PatentSource {
 
     /// The fetched bytes, unparsed.
     ///
-    /// Kept alongside `fetch` so `tools/refresh_fixtures.swift` can update the golden
-    /// fixtures through the very code path the app uses, rather than through a curl
-    /// invocation that might differ in a header.
+    /// Kept alongside `fetch` so the library can store the page it parsed, which is what
+    /// makes a `parserVersion` bump a re-parse rather than a second request to somebody
+    /// else's server — and, since the page carries `citation_pdf_url`, what makes the
+    /// original PDF recoverable for a patent imported long before that tab existed.
     func fetchSource(_ number: PatentKey) async throws -> (html: String, url: URL) {
         guard let url = Self.url(for: number) else { throw Failure.badNumber(number) }
-        var request = URLRequest(url: url)
-        request.setValue(
-            "PatentReader/1.0 (mlx-swift-examples; on-device patent reader)",
-            forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: Self.request(url))
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             throw Failure.notFound(number, status: http.statusCode)
         }
         guard let html = String(data: data, encoding: .utf8) else { throw Failure.notText }
         return (html, url)
+    }
+
+    /// The office's own PDF, from the URL the page named.
+    ///
+    /// **Not on the `PatentSource` protocol.** That protocol's promise is one sentence —
+    /// a number in, a `Patent` out — and a source with no PDF to offer, a USPTO Open Data
+    /// Portal conformance among them, should not have to stub a method saying so.
+    /// `PatentPDFService` takes this as a closure for the same reason.
+    ///
+    /// The URL is `PatentPDFLink`'s, read out of the stored page rather than constructed,
+    /// so this deliberately takes a `URL` and not a `PatentKey`: this function knows how
+    /// to fetch a PDF and nothing about where patents keep theirs.
+    ///
+    /// One check, on the first five bytes. A non-200 is caught by the same check without
+    /// needing its own case, because whatever an error page or a captcha is, it does not
+    /// begin `%PDF-` — and what matters to the reader is that the thing that came back is
+    /// not the document, which is what `.notPDF` says, naming the host it came from.
+    func fetchPDF(at url: URL) async throws -> Data {
+        let (data, _) = try await URLSession.shared.data(for: Self.request(url))
+        guard data.starts(with: Data("%PDF-".utf8)) else {
+            throw Failure.notPDF(host: url.host() ?? "the server")
+        }
+        return data
     }
 }

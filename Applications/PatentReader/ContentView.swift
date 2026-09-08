@@ -12,6 +12,9 @@ struct ContentView: View {
     @State private var library = LibraryService()
 
     @State private var openPatent: PatentKey?
+    /// Which of the two views of the open document is up. See `ReaderTab` at the foot of
+    /// this file, and `aimAtText()` for the one thing that moves it on the reader's behalf.
+    @State private var readerTab: ReaderTab = .text
     @State private var selection: PassageSelection?
     @State private var scrollTarget: Int?
     @State private var flash: FlashHighlight?
@@ -103,6 +106,11 @@ struct ContentView: View {
     /// Bumped by ⌘L to put the keyboard in the Ask field. See
     /// `AnswerPaneView.focusRequest` for why it is a counter.
     @State private var askFieldFocusRequest = 0
+
+    /// Bumped to raise the reader's find bar. ⌘F is handled inside `DocumentReaderView`,
+    /// where the find state lives; this is for the affordances that are not a key — the
+    /// header button here, and the overflow row on a phone.
+    @State private var findRequest = 0
 
     init(options: AppOptions) {
         self.options = options
@@ -303,18 +311,50 @@ struct ContentView: View {
     private func readerPane() -> some View {
         Group {
             if let patent {
-                DocumentReaderView(
-                    patent: patent,
-                    rows: rows,
-                    selection: $selection,
-                    flash: flash,
-                    scrollTarget: $scrollTarget,
-                    onCancel: { cancel() },
-                    onOpen: { jump(to: $0) },
-                    onLookUpWord: { term, point in
-                        dictionaryAnchor.showDefinition(term, at: point)
+                VStack(spacing: 0) {
+                    readerTabBar
+                    Divider()
+
+                    // **A `switch`, not a `ZStack` of two views one of which is
+                    // transparent.** Only one reader is ever in the hierarchy, and that is
+                    // what makes the keyboard question answer itself: `DocumentReaderView`
+                    // carries ⌘F, ⌘G, ⇧⌘C, `.focusable()`, `.onMoveCommand`,
+                    // `.onExitCommand` and `.onCopyCommand`, and all of them leave with
+                    // the view, so there are never two handlers for one key. A
+                    // zero-opacity `ZStack` — which is exactly the trick this app uses for
+                    // hidden shortcuts — would keep both live, and would hold a
+                    // several-hundred-row `LazyVStack` and a `PDFDocument` resident at
+                    // once.
+                    //
+                    // It costs two things, both accepted: coming back from the PDF rebuilds
+                    // `DocumentReaderView` with fresh state, so the find bar and its query
+                    // do not survive the trip, and a hand-panned scroll position is lost —
+                    // `.onAppear` puts `selection?.head` back, so a reader with a row
+                    // selected lands on it and one who scrolled by hand lands at the top.
+                    switch readerTab {
+                    case .text:
+                        DocumentReaderView(
+                            patent: patent,
+                            rows: rows,
+                            selection: $selection,
+                            flash: flash,
+                            scrollTarget: $scrollTarget,
+                            onCancel: { cancel() },
+                            onOpen: { jump(to: $0) },
+                            onLookUpWord: { term, point in
+                                dictionaryAnchor.showDefinition(term, at: point)
+                            },
+                            findRequest: findRequest
+                        )
+                    case .original:
+                        PatentPDFReaderView(
+                            patent: patent, pdf: library.pdf,
+                            onFindInText: {
+                                aimAtText()
+                                findRequest += 1
+                            })
                     }
-                )
+                }
             } else {
                 emptyState
             }
@@ -330,6 +370,33 @@ struct ContentView: View {
         // registered here *is* the anchor's own coordinate system.
         .coordinateSpace(name: DictionaryAnchor.space)
         .background { DictionaryAnchorView(anchor: dictionaryAnchor) }
+    }
+
+    /// **Reader text / Original PDF**, in a bar of its own above the reader.
+    ///
+    /// Not in the macOS `header` and not a toolbar item. The header is window chrome that
+    /// outlives the document — the library toggle, back and forward, the answers toggle —
+    /// and a control naming two views of *this* patent belongs to the patent. It is also
+    /// the only placement with no `#if`: a toolbar item would need one implementation per
+    /// platform in a file whose `layout` comment says what differs between them is the
+    /// container and nothing else.
+    ///
+    /// Inside `if let patent`, so with nothing open there is no bar — there would be
+    /// nothing to switch between. `.fixedSize()` keeps a segmented control from stretching
+    /// to a 680pt reader pane.
+    @ViewBuilder
+    private var readerTabBar: some View {
+        Picker("View", selection: $readerTab) {
+            ForEach(ReaderTab.allCases, id: \.self) { tab in
+                Text(tab.title).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel("Which view of this patent")
     }
 
     @ViewBuilder
@@ -396,6 +463,7 @@ struct ContentView: View {
                 }
 
                 backForward
+                findButton
                 typefaceMenu
 
                 if showsDiagnostics {
@@ -448,10 +516,15 @@ struct ContentView: View {
                 if history.canGoBack {
                     Button("Back", systemImage: "chevron.left") { goBack() }
                 }
+                // Neither is ⌘F, and this is the only way to a find field on a phone.
+                Button("Find in this patent", systemImage: "text.magnifyingglass") {
+                    aimAtText()
+                    findRequest += 1
+                }
                 Button("Copy passage", systemImage: "doc.on.doc") { copySelection() }
-                    .disabled(selection == nil)
+                    .disabled(selection == nil || readerTab != .text)
                 Button("Clear selection", systemImage: "xmark") { selection = nil }
-                    .disabled(selection == nil)
+                    .disabled(selection == nil || readerTab != .text)
                 Divider()
                 Toggle("Show diagnostics", isOn: $diagnosticsPreference)
             } label: {
@@ -470,6 +543,26 @@ struct ContentView: View {
             copyToPasteboard(Citation.quotation(patent, rows: Array(rows[range])))
         }
     #endif
+
+    /// ⌘F, as a control — because a shortcut nobody is told about is a feature half the
+    /// readers do not have. The bar itself, and the key, belong to `DocumentReaderView`.
+    ///
+    /// Disabled with no patent open, where there is nothing to search and no reader view to
+    /// receive the request. Switches to the reader text first, for the same reason ⌘F does
+    /// on the PDF tab: the words this searches are the parsed text's.
+    @ViewBuilder
+    private var findButton: some View {
+        Button {
+            aimAtText()
+            findRequest += 1
+        } label: {
+            Image(systemName: "text.magnifyingglass")
+        }
+        .buttonStyle(.borderless)
+        .disabled(patent == nil)
+        .help("Find in this patent (⌘F)")
+        .accessibilityLabel("Find in this patent")
+    }
 
     /// ⌘[ and ⌘], as a control on macOS and as an overflow row on a phone.
     @ViewBuilder
@@ -823,12 +916,31 @@ struct ContentView: View {
         showsLibrary = false
     }
 
+    /// Puts the reader text up, because what is about to be aimed at is in it.
+    ///
+    /// **The app's central promise runs through here.** A paragraph number is a fact about
+    /// the parsed text; the PDF is paginated by the office's typesetting and carries no
+    /// index this app can resolve `[0042]` against. So "click a citation, land on the
+    /// paragraph" means landing in the *text*, and the tab has to move with the jump rather
+    /// than the jump quietly doing nothing behind a PDF.
+    ///
+    /// Called by `jump(to:)`, `showNumeral(_:)`, `scrollToSection(_:)` and `restore(_:)`,
+    /// which between them cover `locate`, `goBack` and `goForward` transitively.
+    ///
+    /// Deliberately **not** folded into `revealReader()`, which early-returns at a regular
+    /// width — that is every Mac and half the iPads, so the tab would move on a phone and
+    /// not on a desk.
+    private func aimAtText() {
+        readerTab = .text
+    }
+
     /// The jump. This is the function the whole app is for.
     ///
     /// Five steps, and the order of the first two matters: switching documents clears the
     /// selection, so the history push and the switch have to happen before anything is
     /// aimed.
     private func jump(to target: CitationTarget) {
+        aimAtText()
         guard let destination = library.store.patent(target.patent) else { return }
 
         if target.patent != openPatent {
@@ -887,6 +999,7 @@ struct ContentView: View {
     /// than not — a patent introduces a part where it first names it, because that is the
     /// drafting convention the numerals exist to serve.
     private func showNumeral(_ numeral: Int) {
+        aimAtText()
         guard let patent else { return }
         let token = String(numeral)
         guard
@@ -916,6 +1029,7 @@ struct ContentView: View {
     }
 
     private func scrollToSection(_ index: Int) {
+        aimAtText()
         guard let patent else { return }
         let row: DocumentRow?
         if index == LibraryOutline.claimsSection {
@@ -951,6 +1065,7 @@ struct ContentView: View {
     }
 
     private func restore(_ position: NavigationHistory.Position) {
+        aimAtText()
         openPatent = position.patent
         selection = position.row.map(PassageSelection.init(at:))
         scrollTarget = position.row
@@ -1152,5 +1267,27 @@ struct ContentView: View {
     private func cancel() {
         Task { await service.stopActiveWork() }
         clearAnswer()
+    }
+}
+
+/// The two views of one patent.
+///
+/// At file scope, as `FlashHighlight` sits at the foot of `DocumentReaderView.swift`: it is
+/// a small value the pane is built from rather than part of `ContentView`'s interface.
+///
+/// The division is worth stating because it is the thing a reader has to hold: everything
+/// the app *does* addresses the parsed text — a citation resolves to a row, ⌘F searches
+/// rows, ⇧⌘C quotes rows, a selection scopes a question to rows — and this tab is the
+/// document those rows are a reading of. So the PDF is PDFKit and nothing else: no find
+/// bar, no row selection, no citation chips drawn over it.
+enum ReaderTab: String, CaseIterable, Hashable, Sendable {
+    case text
+    case original
+
+    var title: String {
+        switch self {
+        case .text: "Reader text"
+        case .original: "Original PDF"
+        }
     }
 }

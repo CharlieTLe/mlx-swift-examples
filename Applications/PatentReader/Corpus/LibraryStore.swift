@@ -51,6 +51,15 @@ final class LibraryStore {
         libraryDirectory.appendingPathComponent("\(key.slug).source.html")
     }
 
+    /// The office's own PDF, beside the document and the page it was parsed from.
+    ///
+    /// One filename for both paths in, which is what makes the reader's PDF tab one piece
+    /// of code: a dropped file's bytes are copied here at import, and a fetched patent's
+    /// PDF is downloaded here the first time somebody asks to see it.
+    private func sourcePDFURL(_ key: PatentKey) -> URL {
+        libraryDirectory.appendingPathComponent("\(key.slug).source.pdf")
+    }
+
     // MARK: - Reading
 
     func patent(_ key: PatentKey) -> Patent? {
@@ -106,10 +115,16 @@ final class LibraryStore {
     /// silently overwriting, because an import is usually a mistake at that point — the
     /// reader typed a number they already have — and because overwriting throws away an
     /// index. `replacing: true` is the re-parse path, which is a deliberate act.
+    ///
+    /// `sourcePDF` is the import path's copy of a dropped file, written best-effort
+    /// alongside the HTML for the same reason: the reader asked for a *patent*, and a full
+    /// disk should cost them the extra rather than the import. The reader who asks to see
+    /// the PDF itself goes through `storePDF(_:for:)`, which throws.
     @discardableResult
-    func store(_ patent: Patent, sourceHTML: String? = nil, replacing: Bool = false) throws
-        -> Patent
-    {
+    func store(
+        _ patent: Patent, sourceHTML: String? = nil, sourcePDF: Data? = nil,
+        replacing: Bool = false
+    ) throws -> Patent {
         if !replacing, patents.contains(where: { $0.key == patent.key }) {
             throw StoreError.alreadyPresent(patent.key)
         }
@@ -127,6 +142,9 @@ final class LibraryStore {
             // for re-parsing. A full disk should cost the convenience, not the import.
             try? Data(sourceHTML.utf8).write(to: sourceURL(patent.key), options: .atomic)
         }
+        if let sourcePDF {
+            try? sourcePDF.write(to: sourcePDFURL(patent.key), options: .atomic)
+        }
 
         patents.removeAll { $0.key == patent.key }
         patents.append(patent)
@@ -137,24 +155,53 @@ final class LibraryStore {
         return patent
     }
 
-    /// Removes a patent, its source, and its index together.
+    /// Removes a patent, its source, its PDF and its index together.
     ///
     /// Together is the point. An index left behind for a deleted patent is entries that
     /// resolve to nothing — every one of them a `.nonexistent` citation waiting to
-    /// happen — and it is invisible, because nothing lists index files.
+    /// happen — and it is invisible, because nothing lists index files. The PDF is the
+    /// same argument with a bigger number on it: several megabytes per patent, in a
+    /// directory whose only listing is `NOTICE.md`, which would no longer mention it.
     func remove(_ key: PatentKey) {
         let manager = FileManager.default
         try? manager.removeItem(at: documentURL(key))
         try? manager.removeItem(at: sourceURL(key))
+        try? manager.removeItem(at: sourcePDFURL(key))
         try? manager.removeItem(
             at: indexDirectory.appendingPathComponent("\(key.slug).json"))
         patents.removeAll { $0.key == key }
         writeNotice()
     }
 
-    /// The stored source bytes, for a re-parse after a `parserVersion` bump.
+    /// The stored source bytes, for a re-parse after a `parserVersion` bump — and for
+    /// recovering the link to the original PDF, which is a fact about the page rather than
+    /// about the patent and so was never copied into the document. See `PatentPDFLink`.
     func storedSource(_ key: PatentKey) -> String? {
         try? String(contentsOf: sourceURL(key), encoding: .utf8)
+    }
+
+    /// The stored PDF, if there is one.
+    ///
+    /// A `URL` and **not** `Data`, deliberately: PDFKit memory-maps a file it is handed a
+    /// URL for, and a 6 MB grant read into `Data` and passed to `PDFDocument(data:)` goes
+    /// through the heap on a device already holding two models.
+    func storedPDF(_ key: PatentKey) -> URL? {
+        let url = sourcePDFURL(key)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Writes the PDF for a patent already in the library.
+    ///
+    /// **Throws**, unlike the best-effort `try?` on `sourceHTML` next door, and the
+    /// difference is who asked. The HTML is kept for a re-parse nobody requested, so a
+    /// full disk should cost that quietly; this is written because the reader opened the
+    /// Original PDF tab, and a failure they were not told about would leave them looking
+    /// at a spinner that resolves to nothing.
+    func storePDF(_ data: Data, for key: PatentKey) throws {
+        try FileManager.default.createDirectory(
+            at: libraryDirectory, withIntermediateDirectories: true)
+        try data.write(to: sourcePDFURL(key), options: .atomic)
+        writeNotice()
     }
 
     // MARK: - Provenance
@@ -173,21 +220,28 @@ final class LibraryStore {
             "Everything in this directory was imported by Patent Reader on this Mac.",
             "One `<number>.json` per patent, with the bytes it was parsed from beside it",
             "as `<number>.source.html`, so a parser change can re-read them without",
-            "asking the source for them again.",
+            "asking the source for them again. Where the column below says so, the",
+            "office's own PDF is kept too, as `<number>.source.pdf` — copied from the",
+            "file that was dropped, or downloaded the first time the reader opened the",
+            "Original PDF tab. Deleting a patent from the app removes all three, and its",
+            "index.",
             "",
             "## Provenance",
             "",
             "US patent text is a public record and is not subject to copyright. The page",
             "markup these were parsed from, and the OCR in older documents, are Google's.",
-            "This app fetches one page per patent, on request, and does not crawl. Terms",
-            "of service for programmatic access to patents.google.com have not been",
-            "cleared by this project; read them before relying on this beyond personal",
-            "use. `Ingest/PatentSource.swift` is the seam where another source goes.",
+            "This app fetches one page per patent, on request, and does not crawl. It",
+            "fetches at most one PDF per patent, from",
+            "`patentimages.storage.googleapis.com`, and only when the reader asks to see",
+            "it. Terms of service for programmatic access to patents.google.com have not",
+            "been cleared by this project; read them before relying on this beyond",
+            "personal use. `Ingest/PatentSource.swift` is the seam where another source",
+            "goes.",
             "",
             "## Contents",
             "",
-            "| Number | Title | Source | Retrieved | Parser | Numbering |",
-            "|---|---|---|---|---|---|",
+            "| Number | Title | Source | Retrieved | Parser | Numbering | PDF |",
+            "|---|---|---|---|---|---|---|",
         ]
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withFullDate]
@@ -195,7 +249,8 @@ final class LibraryStore {
             lines.append(
                 "| \(patent.key.display) | \(patent.title) | \(patent.source.kind.rawValue) "
                     + "| \(formatter.string(from: patent.source.retrieved)) "
-                    + "| \(patent.source.parserVersion) | \(patent.numbering.rawValue) |")
+                    + "| \(patent.source.parserVersion) | \(patent.numbering.rawValue) "
+                    + "| \(storedPDF(patent.key) == nil ? "—" : "kept") |")
         }
         lines.append("")
 

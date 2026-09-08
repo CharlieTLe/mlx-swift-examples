@@ -35,6 +35,9 @@ final class LibraryService {
     let store: LibraryStore
     let index: PatentIndex
     let embedder: EmbeddingService
+    /// The original PDFs. Owned here because this type owns the store, and separate from
+    /// it because a lazy fetch is not a step in the order above — see `PatentPDFService`.
+    let pdf: PatentPDFService
 
     private(set) var indexStates: [PatentKey: IndexState] = [:]
     /// Set while a fetch or a file import is in flight, so the library's `+` can show it
@@ -58,6 +61,7 @@ final class LibraryService {
         self.store = store
         self.index = PatentIndex(directory: store.indexDirectory)
         self.embedder = embedder ?? EmbeddingService()
+        self.pdf = PatentPDFService(store: store)
         self.source = source
     }
 
@@ -125,7 +129,16 @@ final class LibraryService {
 
         do {
             let patent = try PatentPDFImporter.load(url)
-            try store.store(patent)
+            // The bytes, kept. A picker URL on iOS is dead after the next launch and a
+            // dropped file on a Mac is gone the moment it moves, so the dropped file's
+            // own path — which is all `Source.url` records — cannot be reopened later.
+            // The copy is made *after* the parse, so a file that is not a patent leaves
+            // nothing behind, and only if it really is a PDF: `.plainText` is an offered
+            // content type, and a `.source.pdf` that PDFKit cannot open would be worse
+            // than no file at all.
+            let bytes = try? Data(contentsOf: url)
+            let isPDF = bytes?.starts(with: Data("%PDF-".utf8)) ?? false
+            try store.store(patent, sourcePDF: isPDF ? bytes : nil)
             enqueue(patent.key)
         } catch {
             importError = error.localizedDescription
@@ -136,6 +149,7 @@ final class LibraryService {
         queue.removeAll { $0 == key }
         index.remove(key)
         store.remove(key)
+        pdf.forget(key)
         indexStates[key] = nil
     }
 

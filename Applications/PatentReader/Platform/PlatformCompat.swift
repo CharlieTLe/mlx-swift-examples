@@ -36,8 +36,10 @@ import SwiftUI
 /// which is unreliable, and because SwiftUI does not report modifiers on a move
 /// command at all. `false` on iOS: a hardware keyboard can hold shift, but there is
 /// no UIKit equivalent of `NSEvent.modifierFlags` to poll outside an event, and the
-/// long-press-then-drag in `DocumentReaderView` is the touch affordance that replaces
-/// shift-click anyway.
+/// long press on a row's **number margin** in `DocumentReaderView` is the touch
+/// affordance that replaces shift-click anyway. The margin rather than anywhere in the
+/// row, because the prose is selectable text and a long press on it belongs to the
+/// system's character selection.
 var isShiftKeyDown: Bool {
     #if os(macOS)
         NSEvent.modifierFlags.contains(.shift)
@@ -82,6 +84,26 @@ var hasMLXDevice: Bool {
 }
 
 extension View {
+    /// Prose the reader can select characters in, on both platforms.
+    ///
+    /// A shim rather than `.textSelection(.enabled)` at each of the three call sites, because
+    /// the *interesting* fact is which text is **not** selectable — a heading, which is a
+    /// handle rather than prose — and naming that requires naming this.
+    ///
+    /// What it took to get here is worth recording, because the obvious diagnosis was wrong
+    /// twice. Turning selection on collided with the row sweep: one long press on a phone
+    /// produced grab handles *and* a five-row selection band, two selections of two different
+    /// things from one gesture. It also looked as though selectable text had broken scrolling —
+    /// a slow drag over the prose selected characters and moved the document not one point.
+    /// It had not. With selection turned back off the same drag still failed to scroll, and
+    /// still swept rows: the culprit was `SweepRecognizer`'s own long press, which a synthesized
+    /// drag arms because it dwells at its start point where a finger keeps moving. Scrolling was
+    /// never the text's fault, and the arbitration in `DocumentReaderView` is what fixes the
+    /// collision that was.
+    func selectableProse() -> some View {
+        textSelection(.enabled)
+    }
+
     /// `Menu` ignores `.buttonStyle(.borderless)`, hence `.menuStyle` on macOS. And
     /// `BorderlessButtonMenuStyle` is macOS-only, so iOS keeps the default style and
     /// takes the indicator alone. In a navigation bar the default style is already

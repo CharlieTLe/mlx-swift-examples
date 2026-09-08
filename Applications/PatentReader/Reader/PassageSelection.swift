@@ -9,6 +9,13 @@ import Foundation
 /// expose a selected character range, the document is row-structured, and row indices are
 /// what the citation, the cache key and the scroll target are all built on.
 ///
+/// **This is not the only selection the reader can make**, and the distinction is worth
+/// holding onto. The prose is system-selectable, so they can also drag out a phrase and copy
+/// exactly that — but SwiftUI will not say which characters those are, so nothing the app does
+/// can be built on it. A *passage* selection is the one that scopes a question, keys the answer
+/// cache and produces a citation, which is why it is still rows, and why the number margin
+/// rather than the prose is what a touch sweep is armed from.
+///
 /// Anchor and head are kept separate rather than normalized into a range because
 /// shift-clicking and shift-arrowing have to extend from the *original* anchor, including
 /// backwards through it.

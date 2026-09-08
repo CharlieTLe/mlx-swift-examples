@@ -29,6 +29,9 @@ struct ClaimRowView: View {
     let claim: Claim
     let patent: Patent
     let spans: [PatentMarkup.Span]
+    /// The find hits in this claim, as offsets into the row's whole text — which for a claim
+    /// is `fullText`, so they have to be cut to the piece being drawn. See `elementSlices`.
+    let highlights: DocumentFind.Highlights
     let depth: Int
     let onOpen: (CitationTarget) -> Void
 
@@ -42,8 +45,9 @@ struct ClaimRowView: View {
                 }
                 MarkedText(
                     text: claim.text, spans: preambleSpans, marked: nil,
-                    typeface: typeface
+                    highlights: highlights.clipped(to: preambleSlice), typeface: typeface
                 )
+                .selectableProse()
                 .font(typeface.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -52,11 +56,16 @@ struct ClaimRowView: View {
             // is drafted as a list and reads as one; run together as a single wrapped
             // block — which is how every patent site renders it — a ten-limitation claim
             // is a 300-word sentence with nine semicolons in it.
-            ForEach(Array(claim.elements.enumerated()), id: \.offset) { _, element in
-                Text(element.text)
-                    .font(typeface.claimElement)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, typeface.claimIndent * CGFloat(element.depth + 1))
+            ForEach(Array(claim.elements.enumerated()), id: \.offset) { index, element in
+                MarkedText(
+                    text: element.text, spans: [], marked: nil,
+                    highlights: highlights.clipped(to: elementSlices[index]),
+                    typeface: typeface
+                )
+                .selectableProse()
+                .font(typeface.claimElement)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, typeface.claimIndent * CGFloat(element.depth + 1))
             }
         }
         // One level per step from an independent claim. Applied to the whole row rather
@@ -129,5 +138,31 @@ struct ClaimRowView: View {
     private var preambleSpans: [PatentMarkup.Span] {
         let limit = claim.text.utf16.count
         return spans.filter { $0.range.upperBound <= limit }
+    }
+
+    /// Where the preamble sits in `fullText`, which is at the front of it.
+    private var preambleSlice: Range<Int> { 0 ..< claim.text.utf16.count }
+
+    /// Where each element sits in `fullText`.
+    ///
+    /// `Claim.fullText` is the preamble and the elements joined by a **single space**, and
+    /// this is the one place that fact is depended on outside the model. It is depended on
+    /// rather than worked around because the alternative is worse: searching each element's
+    /// text separately would give the find field a second set of coordinates for the same
+    /// row, and the row is what a citation names and what ⌘C copies.
+    ///
+    /// Spans get none of this and are simply dropped past the preamble — `preambleSpans`
+    /// above — which is a real if small loss the header explains. A *highlight* cannot be
+    /// dropped the same way, because it is what the reader is looking for.
+    private var elementSlices: [Range<Int>] {
+        var slices: [Range<Int>] = []
+        var start = claim.text.utf16.count
+        for element in claim.elements {
+            start += 1  // the separator `fullText` joins with
+            let length = element.text.utf16.count
+            slices.append(start ..< start + length)
+            start += length
+        }
+        return slices
     }
 }

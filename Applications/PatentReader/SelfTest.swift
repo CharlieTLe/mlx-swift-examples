@@ -36,6 +36,7 @@ enum SelfTest {
         let log = Log()
 
         googlePatentsParse(log)
+        originalPDFLink(log)
         claimTree(log)
         patentNumbers(log)
         citations(log)
@@ -45,7 +46,19 @@ enum SelfTest {
         lexicalRetrieval(log)
         indexIntegrity(log)
         pdfParagraphRecovery(log)
+        // The PDF tab's two testable halves: reading the link out of a stored page, and
+        // deciding what to say when there is no PDF. Deliberately no suite for
+        // `PatentPDFService.pages`, which is a dictionary, or for `PatentPDFView`, which
+        // would be asserting PDFKit's own notification behaviour — `pdfParagraphRecovery`
+        // refuses that for the same reason. The manual checklist in the README stands in
+        // for the representable.
+        originalPDFAvailability(log)
         librarySearch(log)
+        passageAnchors(log)
+        passagePlacement(log)
+        highlightPlan(log)
+        passageLookup(log)
+        documentFind(log)
         quoteCheck(log)
         selection(log)
         followUpParsing(log)
@@ -94,25 +107,42 @@ enum SelfTest {
         let dependencySource: Claim.DependencySource
         let assignee: String
         var numerals: Int
+        /// The filename at the end of the page's `citation_pdf_url`. In the table rather
+        /// than in the suite so that this stays the single description of each fixture —
+        /// and because three of these four drop the kind code and one keeps it, which is
+        /// the fact `originalPDFLink` exists to pin down.
+        let pdfFilename: String
+        /// How many of this fixture's paragraphs are too short for a six-word anchor, and
+        /// therefore cannot be located in the office's PDF at all.
+        ///
+        /// Pinned because it is the app's central promise expressed as a number. A parser
+        /// change that starts splitting paragraphs, or an anchor rule that gets longer,
+        /// shows up here as a build failure rather than as a reader clicking a chip and
+        /// being told the passage cannot be found. See `passageAnchors`.
+        let unanchorableParagraphs: Int
     }
 
     private static let fixtures: [Fixture] = [
         Fixture(
             name: "US10123456B2", paragraphs: 41, claims: 21, independentClaims: 3,
             sections: 5, numbering: .printed, dependencySource: .markup,
-            assignee: "Raytheon Co", numerals: 12),
+            assignee: "Raytheon Co", numerals: 12, pdfFilename: "US10123456.pdf",
+            unanchorableParagraphs: 0),
         Fixture(
             name: "US20140030575A1", paragraphs: 97, claims: 20, independentClaims: 2,
             sections: 15, numbering: .printed, dependencySource: .markup,
-            assignee: "Individual", numerals: 27),
+            assignee: "Individual", numerals: 27, pdfFilename: "US20140030575A1.pdf",
+            unanchorableParagraphs: 0),
         Fixture(
             name: "US7654321B2", paragraphs: 93, claims: 26, independentClaims: 6,
             sections: 4, numbering: .synthesized, dependencySource: .markup,
-            assignee: "Schlumberger Technology Corp", numerals: 104),
+            assignee: "Schlumberger Technology Corp", numerals: 104,
+            pdfFilename: "US7654321.pdf", unanchorableParagraphs: 1),
         Fixture(
             name: "US5000000A", paragraphs: 89, claims: 7, independentClaims: 2,
             sections: 34, numbering: .synthesized, dependencySource: .text,
-            assignee: "University of Florida", numerals: 1),
+            assignee: "University of Florida", numerals: 1,
+            pdfFilename: "US5000000.pdf", unanchorableParagraphs: 0),
     ]
 
     /// The fixtures directory, copied whole as an explicit folder — see the project's
@@ -257,6 +287,78 @@ enum SelfTest {
         } catch {
             // Expected.
         }
+    }
+
+    /// The link to the office's own PDF, read out of each fixture's `<meta>`.
+    ///
+    /// The assertion that earns this suite its place is the third one: **at least one
+    /// fixture's PDF filename is not its patent number**. Everything else here would pass
+    /// against a `"\(slug).pdf"` string concatenation, and that concatenation is right for
+    /// three of these four documents — which is exactly the shape of change that gets made
+    /// as a simplification and then 404s for a quarter of a reader's library.
+    private static func originalPDFLink(_ log: Log) {
+        for fixture in fixtures {
+            guard let html = fixtureHTML(fixture.name) else {
+                log.fail("the \(fixture.name) fixture is missing from the bundle")
+                continue
+            }
+            guard let url = PatentPDFLink.url(inPageHTML: html) else {
+                log.fail("\(fixture.name) has no citation_pdf_url")
+                continue
+            }
+            log.equal(url.scheme, "https", "\(fixture.name) PDF scheme")
+            log.equal(
+                url.host(), "patentimages.storage.googleapis.com",
+                "\(fixture.name) PDF host")
+            log.equal(
+                url.lastPathComponent, fixture.pdfFilename, "\(fixture.name) PDF filename")
+        }
+
+        log.check(
+            fixtures.contains { $0.pdfFilename != "\($0.name).pdf" },
+            "constructing the PDF URL from the patent number would work for these "
+                + "fixtures — the meta must still be read rather than the URL built")
+
+        // A page with metas but no `citation_pdf_url`: the shape a stripped or redesigned
+        // page takes, and the one that has to report rather than guess.
+        log.check(
+            PatentPDFLink.url(
+                inPageHTML: "<html><head><meta name=\"DC.title\" content=\"A patent\">"
+                    + "</head></html>") == nil,
+            "a page with no citation_pdf_url produced a URL")
+        log.check(
+            PatentPDFLink.url(
+                inPageHTML: "<html><head><meta name=\"citation_pdf_url\" content=\"\">"
+                    + "</head></html>") == nil,
+            "an empty citation_pdf_url produced a URL")
+        log.check(
+            PatentPDFLink.url(
+                inPageHTML: "<html><head><meta name=\"citation_pdf_url\" content=\"   \">"
+                    + "</head></html>") == nil,
+            "a whitespace citation_pdf_url produced a URL")
+
+        // Three schemes that must not survive, each named. This URL comes out of a
+        // document fetched over the network and goes straight to `URLSession`.
+        for (scheme, content) in [
+            ("http", "http://patentimages.storage.googleapis.com/a.pdf"),
+            ("file", "file:///etc/passwd"),
+            ("javascript", "javascript:alert(1)"),
+        ] {
+            log.check(
+                PatentPDFLink.url(
+                    inPageHTML:
+                        "<html><head><meta name=\"citation_pdf_url\" content=\"\(content)\">"
+                        + "</head></html>") == nil,
+                "a \(scheme): citation_pdf_url was accepted")
+        }
+
+        // The entity decoding is `HTMLScanner`'s, which is the reason this reuses the
+        // scanner rather than growing a regex for one attribute: a hand-rolled match would
+        // hand `URL` the literal `&amp;` and produce a query nobody wrote.
+        let escaped = PatentPDFLink.url(
+            inPageHTML: "<html><head><meta name=\"citation_pdf_url\" "
+                + "content=\"https://example.com/a.pdf?x=1&amp;y=2\"></head></html>")
+        log.equal(escaped?.query(), "x=1&y=2", "the PDF URL's entities were not decoded")
     }
 
     /// Every dependency resolves, nothing cycles, and every dependent claim reaches an
@@ -948,6 +1050,111 @@ enum SelfTest {
         pdfMergedParagraphs(log)
     }
 
+    /// What the Original PDF tab shows, and what it says when it has nothing to show.
+    ///
+    /// Driven through the pure `PatentPDFAvailability.availability(...)` with a real
+    /// stored page, so the whole of the decision and the whole of the copy are asserted
+    /// without a view, a file or a network — the same discipline `pdfParagraphRecovery`
+    /// applies to the importer's refusals.
+    private static func originalPDFAvailability(_ log: Log) {
+        guard let html = fixtureHTML("US10123456B2") else {
+            log.fail("the US10123456B2 fixture is missing from the bundle")
+            return
+        }
+        let key = PatentKey(country: "US", serial: "10123456", kind: "B2")
+        let file = URL(fileURLWithPath: "/tmp/US10123456B2.source.pdf")
+
+        // A fetched patent whose copy has arrived.
+        if case .onDisk(let found) = PatentPDFAvailability.availability(
+            kind: .googlePatentsHTML, cachedFile: file, storedPageHTML: html)
+        {
+            log.equal(found, file, "the stored PDF's URL")
+        } else {
+            log.fail("a fetched patent with its PDF on disk is not readable")
+        }
+
+        // **The retroactive case, and the requirement most worth a test**: a patent
+        // imported long before this feature existed, with nothing on disk but the page it
+        // was parsed from, gains a working PDF tab with no re-import and no second request
+        // for the page.
+        if case .downloadable(let url) = PatentPDFAvailability.availability(
+            kind: .googlePatentsHTML, cachedFile: nil, storedPageHTML: html)
+        {
+            log.equal(
+                url, PatentPDFLink.url(inPageHTML: html),
+                "the recovered PDF URL disagrees with the page")
+        } else {
+            log.fail(
+                "an already-imported patent does not recover its PDF from its stored page")
+        }
+
+        log.equal(
+            PatentPDFAvailability.availability(
+                kind: .googlePatentsHTML, cachedFile: nil, storedPageHTML: nil),
+            .unavailable(.noStoredPage), "a fetched patent with no stored page")
+        log.equal(
+            PatentPDFAvailability.availability(
+                kind: .googlePatentsHTML, cachedFile: nil,
+                storedPageHTML: "<html><head></head></html>"),
+            .unavailable(.noLinkInPage), "a stored page carrying no link")
+
+        // The PDF import path, both ways round. Its bytes are the import, so nothing but
+        // the reader can recover them.
+        log.equal(
+            PatentPDFAvailability.availability(
+                kind: .pdf, cachedFile: file, storedPageHTML: nil),
+            .onDisk(file), "an imported PDF with its copy kept")
+        log.equal(
+            PatentPDFAvailability.availability(
+                kind: .pdf, cachedFile: nil, storedPageHTML: nil),
+            .unavailable(.importedCopyGone), "an imported PDF with no copy kept")
+
+        // `.plainText` is a case no importer produces today, which is exactly why it is
+        // checked: it must report rather than fall through to a PDF that is not there.
+        log.equal(
+            PatentPDFAvailability.availability(
+                kind: .plainText, cachedFile: nil, storedPageHTML: nil),
+            .unavailable(.notAPDFSource), "a text import")
+        log.equal(
+            PatentPDFAvailability.availability(
+                kind: .plainText, cachedFile: file, storedPageHTML: html),
+            .unavailable(.notAPDFSource), "a text import with a stray file beside it")
+
+        // The copy. Every reason says something, and the two with a remedy still name it —
+        // a reword that drops the instruction fails the build rather than a reader's
+        // afternoon.
+        for reason in [
+            PatentPDFAvailability.Reason.noStoredPage, .noLinkInPage, .importedCopyGone,
+            .notAPDFSource,
+        ] {
+            log.check(!reason.headline.isEmpty, "\(reason) has no headline")
+            log.check(!reason.detail(for: key).isEmpty, "\(reason) has no detail")
+        }
+        log.check(
+            PatentPDFAvailability.Reason.noStoredPage.detail(for: key).contains("fetch"),
+            "the missing-page report does not tell the reader to fetch the patent again")
+        log.check(
+            PatentPDFAvailability.Reason.noStoredPage.detail(for: key)
+                .contains(key.display),
+            "the missing-page report does not name the patent to remove")
+        log.check(
+            PatentPDFAvailability.Reason.importedCopyGone.detail(for: key)
+                .contains("Import"),
+            "the missing-copy report does not tell the reader to import the file again")
+
+        // A captcha or an error page in place of the document, named with the host it came
+        // from — the app's second network destination, and the one nothing else mentions.
+        let notPDF = GooglePatentsSource.Failure.notPDF(
+            host: "patentimages.storage.googleapis.com")
+        log.check(
+            notPDF.errorDescription?.contains("patentimages.storage.googleapis.com")
+                ?? false,
+            "the not-a-PDF failure does not name the host")
+        log.check(
+            notPDF.errorDescription?.contains("captcha") ?? false,
+            "the not-a-PDF failure does not explain itself")
+    }
+
     /// A PCT application as filed, which carries none of the structure the rest rely on.
     ///
     /// No `[nnnn]` markers are printed in one — the applicant did not number the
@@ -1303,6 +1510,532 @@ enum SelfTest {
         log.check(
             !outline.isOpen(section: 2, in: key),
             "closing a patent should drop its open section")
+    }
+
+    // MARK: - Anchoring a passage in the office's PDF
+
+    /// The needles, and the three rules that decide them.
+    ///
+    /// **This is where the app's central promise is defended in a form a build can check.**
+    /// Everything downstream of an anchor — the placement, the highlight, the jump — is
+    /// PDFKit, which `--selftest` deliberately does not touch. The needle is the part that
+    /// is pure, and it is also the part that a well-meaning simplification would quietly
+    /// ruin: lengthen it and line wrap defeats it, shorten it and it matches everywhere,
+    /// build a claim's out of `fullText` and it scores 3/20. Each of those is pinned below.
+    private static func passageAnchors(_ log: Log) {
+        guard let patent = parsed("US10123456B2") else {
+            log.fail("could not load US10123456B2 for the anchor checks")
+            return
+        }
+        let anchors = PassageAnchors.anchors(in: patent)
+
+        func anchor(_ target: CitationTarget) -> PassageAnchor? {
+            anchors.first { $0.target == target }
+        }
+
+        // A paragraph's needle is exactly six single-spaced words of its own text, written
+        // out here rather than derived, so that a change to the rule has to be typed twice.
+        let first = ParagraphKey(patent: patent.key, number: 1)
+        log.equal(
+            anchor(.paragraph(first))?.needle, "The present disclosure is directed, in",
+            "the needle for [0001]")
+        log.check(
+            anchor(.paragraph(first))?.fallback == nil,
+            "a paragraph should carry no fallback needle")
+
+        // Every needle is exactly six words, single-spaced, and is a prefix of the
+        // paragraph's own text — the invariant that makes it findable at all.
+        for anchor in anchors {
+            guard case .paragraph(let key) = anchor.target,
+                let paragraph = patent.paragraph(numbered: key.number)
+            else { continue }
+            log.equal(
+                anchor.needle.split(separator: " ").count, PassageAnchors.paragraphWords,
+                "the word count of the needle for [\(key.number)]")
+            log.check(
+                !anchor.needle.contains("  "),
+                "the needle for [\(key.number)] is not single-spaced")
+            log.check(
+                PassageAnchors.normalized(paragraph.text)
+                    .hasPrefix(PassageAnchors.normalized(anchor.needle)),
+                "the needle for [\(key.number)] is not the paragraph's own opening")
+        }
+
+        // A claim's needle is its printed number and its preamble, and **never** spills
+        // into `elements`. That is the 20/20-against-3/20 measurement: a claim's elements
+        // are separated in the printed document by line breaks and a hanging indent, which
+        // no `findString` crosses. Claim 7 of this fixture has elements, which is what makes
+        // it the one to assert on.
+        guard let seven = patent.claim(numbered: 7),
+            let sevenAnchor = anchor(.claim(ClaimKey(patent: patent.key, number: 7)))
+        else {
+            log.fail("US10123456B2 has no claim 7 to anchor")
+            return
+        }
+        log.check(
+            sevenAnchor.needle.hasPrefix("7. "), "a claim's needle should open with its "
+                + "printed number, which `Claim.text` has stripped")
+        for element in seven.elements {
+            log.check(
+                !sevenAnchor.needle.contains(element.text),
+                "a claim's needle must never reach into its elements")
+        }
+        log.equal(
+            sevenAnchor.needle.split(separator: " ").count,
+            PassageAnchors.claimWords + 1, "the word count of claim 7's needle")
+
+        // Claim 1 of this fixture reads, in full, `A method comprising:` — three words,
+        // which is the commonest independent-claim shape there is. The number is what makes
+        // it findable, so it anchors on what is there rather than on nothing.
+        log.equal(
+            anchor(.claim(ClaimKey(patent: patent.key, number: 1)))?.needle,
+            "1. A method comprising:", "the needle for a three-word claim preamble")
+
+        // Front matter exists in no document and is never anchored.
+        log.check(
+            anchor(.paragraph(ParagraphKey(patent: patent.key, number: 0))) == nil,
+            "the synthetic front-matter chunk should never be anchored")
+
+        // Anchors arrive in `Patent.rows` order, which is what `monotonic` requires: the
+        // specification section by section, then the claims.
+        let order = patent.rows.compactMap { $0.target(in: patent.key) }
+        log.equal(
+            anchors.map(\.target), order.filter { target in anchors.contains { $0.target == target } },
+            "anchors should be in document order")
+
+        // What cannot be anchored, per fixture, as a number. See `Fixture`.
+        for fixture in fixtures {
+            guard let patent = parsed(fixture.name) else {
+                log.fail("could not load \(fixture.name) for the anchor counts")
+                continue
+            }
+            let anchored = Set(
+                PassageAnchors.anchors(in: patent).compactMap { anchor -> Int? in
+                    guard case .paragraph(let key) = anchor.target else { return nil }
+                    return key.number
+                })
+            log.equal(
+                patent.paragraphs.filter { !anchored.contains($0.number) }.count,
+                fixture.unanchorableParagraphs,
+                "\(fixture.name): paragraphs too short to anchor")
+        }
+    }
+
+    /// The ordering rule, which is the whole of the placement algorithm.
+    ///
+    /// Synthetic candidate lists rather than a document, because what is being asserted is
+    /// arithmetic over ordinals and because there is no PDF in this repository to assert it
+    /// against — `--anchor` is how the real thing gets measured. Every case here is one that
+    /// naive first-match gets wrong.
+    private static func passagePlacement(_ log: Log) {
+        func c(_ page: Int, _ offset: Int) -> Candidate { Candidate(page: page, offset: offset) }
+
+        // Lexicographic, and this is the comparison a geometric ordinal got wrong: a hit at
+        // the bottom of page 1 precedes one at the top of page 2, whatever their heights.
+        log.check(c(1, 9000) < c(2, 0), "a later page should sort after an earlier one")
+        log.check(c(1, 5) < c(1, 6), "a later offset on one page should sort after an earlier")
+        log.check(!(c(2, 0) < c(1, 9000)), "the comparison should not be symmetric")
+
+        // Unambiguous input is the identity.
+        log.equal(
+            PassagePlacement.monotonic([[c(0, 10)], [c(0, 20)], [c(1, 5)]]),
+            [c(0, 10), c(0, 20), c(1, 5)], "one candidate each")
+
+        // The case first-match gets wrong: every target's *first* candidate is early, and
+        // only the ordering picks the run that ascends.
+        log.equal(
+            PassagePlacement.monotonic([
+                [c(0, 1), c(0, 50)], [c(0, 2), c(0, 60)], [c(0, 70)],
+            ]),
+            [c(0, 1), c(0, 2), c(0, 70)], "the earliest ascending run")
+
+        // A target placed late forces the next one past its own first candidate.
+        log.equal(
+            PassagePlacement.monotonic([[c(0, 50)], [c(0, 20), c(0, 60)]]),
+            [c(0, 50), c(0, 60)], "a late placement pushes the next one along")
+
+        // Stuck: unplaced, the cursor unmoved, and everything after it still places. The
+        // alternative — resetting the cursor — trades one lost chip for a cascade.
+        log.equal(
+            PassagePlacement.monotonic([[c(0, 50)], [c(0, 20)], [c(0, 60)]]),
+            [c(0, 50), nil, c(0, 60)], "a stuck target should not move the cursor")
+
+        // Nothing found at all.
+        log.equal(
+            PassagePlacement.monotonic([[c(0, 10)], [], [c(0, 20)]]),
+            [c(0, 10), nil, c(0, 20)], "an anchor that found nothing")
+        log.equal(PassagePlacement.monotonic([]), [], "an empty document")
+
+        // The invariant that is the whole guarantee, over a thousand seeded random shapes:
+        // **every placed ordinal is strictly greater than the one before it.** A placement
+        // that goes backwards is a highlight in the wrong place, which looks exactly like a
+        // highlight in the right place.
+        var seed: UInt64 = 0x5EED
+        func random(_ bound: Int) -> Int {
+            // xorshift64, so the shapes are the same on every machine and a failure can be
+            // reproduced from the seed alone.
+            seed ^= seed << 13
+            seed ^= seed >> 7
+            seed ^= seed << 17
+            return Int(seed % UInt64(bound))
+        }
+        for shape in 0 ..< 1000 {
+            let targets = 1 + random(30)
+            let lists = (0 ..< targets).map { _ -> [Candidate] in
+                (0 ..< random(5)).map { _ in c(random(20), random(4000)) }
+            }
+            let placed = PassagePlacement.monotonic(lists).compactMap { $0 }
+            for (previous, next) in zip(placed, placed.dropFirst()) where !(previous < next) {
+                log.fail("shape \(shape): placements did not ascend — \(previous), \(next)")
+            }
+            log.equal(
+                PassagePlacement.monotonic(lists).count, targets,
+                "shape \(shape): one answer per target")
+        }
+
+        // The find cursor, ported out of `DocumentFind` so its assertions outlive it.
+        log.equal(PassagePlacement.index(nearest: nil, in: [3, 7, 9]), 0, "no reading position")
+        log.equal(PassagePlacement.index(nearest: 7, in: [3, 7, 9]), 1, "a hit on the page")
+        log.equal(PassagePlacement.index(nearest: 4, in: [3, 7, 9]), 1, "the next hit after")
+        log.equal(
+            PassagePlacement.index(nearest: 40, in: [3, 7, 9]), 0,
+            "a position past the last hit should wrap to the first")
+
+        log.equal(PassagePlacement.stepped(from: nil, by: 1, count: 3), 1, "the first step")
+        log.equal(PassagePlacement.stepped(from: 2, by: 1, count: 3), 0, "wrapping forwards")
+        log.equal(PassagePlacement.stepped(from: 0, by: -1, count: 3), 2, "wrapping backwards")
+        log.equal(
+            PassagePlacement.stepped(from: nil, by: 1, count: 0), nil,
+            "stepping through nothing")
+    }
+
+    /// Which passages an answer paints on the document, and — the interesting half — which
+    /// it refuses to.
+    private static func highlightPlan(_ log: Log) {
+        let key = PatentKey(country: "US", serial: "10123456", kind: "B2")
+        let other = PatentKey(country: "US", serial: "5000000", kind: "A")
+        func paragraph(_ number: Int, in patent: PatentKey = key) -> CitationTarget {
+            .paragraph(ParagraphKey(patent: patent, number: number))
+        }
+        func cited(_ target: CitationTarget, _ verdict: CitationCheck.Verdict) -> AnswerRun {
+            .citation(AnswerRun.Citation(target: target, literal: "x", verdict: verdict))
+        }
+
+        log.equal(
+            HighlightPlan.make(for: key, retrieved: [], runs: [], focus: nil),
+            .empty, "no answer, no plan")
+
+        // Precedence. A passage that was retrieved, cited and then clicked is one passage,
+        // and it draws in the strongest of the three.
+        let plan = HighlightPlan.make(
+            for: key,
+            retrieved: [paragraph(1), paragraph(2), paragraph(3)],
+            runs: [cited(paragraph(2), .supported), cited(paragraph(3), .supported)],
+            focus: PassageFocus(paragraph(3)))
+        log.equal(plan.roles[paragraph(1)], .retrieved, "a retrieved passage")
+        log.equal(plan.roles[paragraph(2)], .cited, "cited beats retrieved")
+        log.equal(plan.roles[paragraph(3)], .focused, "focused beats cited")
+
+        // A citation the model was never shown is real and is not painted. Marking it would
+        // be the app endorsing a connection the model invented, in the most authoritative
+        // place it has — the same argument that already makes that chip unclickable.
+        let unsupported = HighlightPlan.make(
+            for: key, retrieved: [],
+            runs: [cited(paragraph(9), .unretrieved), cited(paragraph(99), .nonexistent)],
+            focus: nil)
+        log.check(
+            unsupported.roles.isEmpty,
+            "only a `.supported` citation should be painted on the document")
+
+        // Front matter is `Chunker`'s title-and-abstract address and exists in no document.
+        // Retrieval hits it constantly, so this is the ordinary case.
+        let front = HighlightPlan.make(
+            for: key, retrieved: [paragraph(0), paragraph(4)],
+            runs: [cited(paragraph(0), .supported)], focus: nil)
+        log.equal(
+            Set(front.roles.keys), [paragraph(4)], "front matter should never be marked")
+
+        // Another patent's passages. Retrieval is library-wide; marking is per document.
+        let across = HighlightPlan.make(
+            for: key, retrieved: [paragraph(5), paragraph(6, in: other)],
+            runs: [cited(paragraph(7, in: other), .supported)], focus: nil)
+        log.equal(
+            Set(across.roles.keys), [paragraph(5)],
+            "a passage in another patent should be dropped")
+
+        // Clicking the same chip twice has to move the reader twice, which is what the
+        // focus identity is for and the whole reason it is not a bare target.
+        let once = PassageFocus(paragraph(3))
+        let twice = PassageFocus(paragraph(3))
+        log.check(once != twice, "two focuses on one passage must not compare equal")
+        log.equal(once.target, twice.target, "…while still naming the same passage")
+    }
+
+    /// A string the reader dragged out of the PDF, back to the passage it came from.
+    ///
+    /// The textual fallback for `PatentPDFMap`'s bracket lookup, and the leg that has to
+    /// survive what a PDF does to text on the way out: hard line breaks where the parse has
+    /// spaces, a hyphen the typesetter put in at a line end, and doubled spaces from
+    /// justification.
+    private static func passageLookup(_ log: Log) {
+        guard let patent = parsed("US10123456B2") else {
+            log.fail("could not load US10123456B2 for the passage-lookup checks")
+            return
+        }
+        guard let paragraph = patent.paragraphs.first(where: { $0.text.count > 200 }) else {
+            log.fail("the fixture has no paragraph long enough to mangle")
+            return
+        }
+        let expected = CitationTarget.paragraph(
+            ParagraphKey(patent: patent.key, number: paragraph.number))
+
+        log.equal(
+            PassageAnchors.target(containing: paragraph.text, in: patent), expected,
+            "a paragraph's own text")
+
+        /// What a selection out of a PDF looks like: the words, re-wrapped at 40 characters,
+        /// with a hyphen inserted at one break and the odd doubled space.
+        func mangled(_ text: String) -> String {
+            var out = ""
+            var column = 0
+            var hyphenated = false
+            for word in text.split(whereSeparator: \.isWhitespace) {
+                if column + word.count > 40 {
+                    // One hyphenated break, across lowercase letters, which is the only
+                    // shape `normalized` is allowed to rejoin.
+                    if !hyphenated, word.count > 6, word.allSatisfy(\.isLowercase) {
+                        let split = word.index(word.startIndex, offsetBy: 3)
+                        out += String(word[..<split]) + "-\n" + String(word[split...]) + " "
+                        hyphenated = true
+                        column = word.count - 3
+                        continue
+                    }
+                    out += "\n"
+                    column = 0
+                }
+                out += word + (column % 7 == 0 ? "  " : " ")
+                column += word.count + 1
+            }
+            return out
+        }
+
+        let selection = mangled(paragraph.text)
+        log.check(
+            selection.contains("-\n"), "the mangler did not produce a hyphenated break")
+        log.equal(
+            PassageAnchors.target(containing: selection, in: patent), expected,
+            "a mangled selection should still resolve to its paragraph")
+
+        // Part of a paragraph, which is what a drag usually is.
+        let part = paragraph.text.split(whereSeparator: \.isWhitespace).dropFirst(3).prefix(12)
+            .joined(separator: " ")
+        log.equal(
+            PassageAnchors.target(containing: mangled(part), in: patent), expected,
+            "part of a paragraph")
+
+        // A claim, which is as citable as a paragraph.
+        guard let claim = patent.claims.first(where: { !$0.elements.isEmpty }) else {
+            log.fail("the fixture has no claim with elements")
+            return
+        }
+        log.equal(
+            PassageAnchors.target(containing: claim.text, in: patent),
+            .claim(ClaimKey(patent: patent.key, number: claim.number)),
+            "a claim's preamble")
+
+        // Nothing, rather than a nearest guess. A selection this app cannot place is a
+        // quotation it must copy uncited, and saying so is the whole doctrine.
+        log.check(
+            PassageAnchors.target(containing: "", in: patent) == nil, "an empty selection")
+        log.check(
+            PassageAnchors.target(containing: "   \n  ", in: patent) == nil,
+            "a whitespace selection")
+        log.check(
+            PassageAnchors.target(
+                containing: "the quality of mercy is not strained", in: patent) == nil,
+            "a foreign string should resolve to nothing rather than to the nearest paragraph")
+
+        // The two rules `normalized` has, stated on their own.
+        log.equal(
+            PassageAnchors.normalized("a  b\nc"), "a b c", "whitespace collapses")
+        log.equal(
+            PassageAnchors.normalized("manufactur- ing"), "manufacturing",
+            "a lowercase break rejoins")
+        log.equal(
+            PassageAnchors.normalized("thermally- Conductive"), "thermally- Conductive",
+            "a break before a capital does not rejoin")
+    }
+
+    // MARK: - Find in the document
+
+    /// The reader's find field: the offsets, the order, the wrap, and the claim clipping.
+    ///
+    /// **The offsets are the reason this suite exists.** Everything else here would fail
+    /// visibly — a wrong count is on screen, a broken wrap goes nowhere — but a match
+    /// addressed one character to the left just draws a highlight that looks slightly off,
+    /// which is the kind of wrong that ships. So every match found in the real fixture is
+    /// checked by going back to the row's text and reading what the offsets actually
+    /// address.
+    private static func documentFind(_ log: Log) {
+        guard let patent = parsed("US10123456B2") else {
+            log.fail("could not load US10123456B2 for the document-find checks")
+            return
+        }
+        let rows = patent.rows
+        let text = Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0.plainText) })
+
+        /// What a match's offsets actually address, or `nil` if they address nothing.
+        func addressed(_ match: DocumentFind.Match) -> String? {
+            guard let row = text[match.row] else { return nil }
+            let count = row.utf16.count
+            guard match.range.lowerBound >= 0, match.range.lowerBound < match.range.upperBound,
+                match.range.upperBound <= count
+            else { return nil }
+            let lower = String.Index(utf16Offset: match.range.lowerBound, in: row)
+            let upper = String.Index(utf16Offset: match.range.upperBound, in: row)
+            return String(row[lower ..< upper])
+        }
+
+        // Below the minimum nothing runs, and the field reports *nothing* rather than "no
+        // matches" — the reader is still typing and has not failed at anything yet.
+        var find = DocumentFind()
+        find.search("s", in: rows, near: nil)
+        log.check(find.matches.isEmpty, "a one-character query should not run")
+        log.check(find.summary == nil, "a query too short to run should report nothing")
+        log.check(!find.isActive, "a one-character query should not read as active")
+
+        // A real term from the fixture, checked against the text it claims to address.
+        find.search("matrix", in: rows, near: nil)
+        log.check(!find.matches.isEmpty, "\"matrix\" should occur in US10123456B2")
+        log.equal(
+            find.matches.compactMap { addressed($0)?.lowercased() }.filter { $0 != "matrix" },
+            [], "every match should address exactly the query")
+        log.equal(
+            find.matches.filter { addressed($0) == nil }.count, 0,
+            "no match should address a range outside its row")
+        log.equal(find.summary, "1 of \(find.matches.count)", "the opening summary")
+
+        // Reading order, and no overlaps: rows never go backwards, and within a row each
+        // hit starts at or after the end of the one before it.
+        var ordered = true
+        for (previous, next) in zip(find.matches, find.matches.dropFirst()) {
+            if next.row < previous.row { ordered = false }
+            if next.row == previous.row, next.range.lowerBound < previous.range.upperBound {
+                ordered = false
+            }
+        }
+        log.check(ordered, "matches should be in reading order and should not overlap")
+
+        // Case insensitivity, from a query nobody would type the same way twice.
+        var upper = DocumentFind()
+        upper.search("MATRIX", in: rows, near: nil)
+        log.equal(
+            upper.matches, find.matches, "matching should be case-insensitive")
+
+        // The wrap, in both directions. Running off the end of a document is not an error.
+        let total = find.matches.count
+        guard total > 1 else {
+            log.fail("the fixture needs more than one \"matrix\" for the wrap checks")
+            return
+        }
+        log.equal(find.cursor, 0, "a fresh search should start at the first match")
+        log.equal(find.advance(by: -1)?.row, find.matches[total - 1].row, "wrapping backwards")
+        log.equal(find.cursor, total - 1, "the cursor after wrapping backwards")
+        log.equal(find.advance(by: 1)?.row, find.matches[0].row, "wrapping forwards")
+        log.equal(find.summary, "1 of \(total)", "the summary after wrapping forwards")
+
+        // The reading position, which is what stops ⌘F from throwing the reader back to
+        // `[0001]`: the cursor lands on the first hit at or after the row they are on. The
+        // *first* in that row matters and is why this is asserted by row — the row a reader
+        // is on often contains several hits, and landing on the last of them would skip the
+        // ones above it.
+        let last = find.matches[total - 1].row
+        var nearEnd = DocumentFind()
+        nearEnd.search("matrix", in: rows, near: last)
+        log.equal(nearEnd.current?.row, last, "a search should start at the reader's row")
+        log.equal(
+            nearEnd.cursor, find.matches.firstIndex { $0.row == last },
+            "a search should start at the first hit in that row, not a later one in it")
+        var pastEnd = DocumentFind()
+        pastEnd.search("matrix", in: rows, near: rows.count)
+        log.equal(pastEnd.cursor, 0, "a position past the last match should wrap to the first")
+
+        // Clearing takes the highlights with it.
+        find.clear()
+        log.check(find.matches.isEmpty, "clearing should drop the matches")
+        log.check(
+            find.highlights(in: find.matches.first?.row ?? 0).isEmpty,
+            "clearing should drop the highlights")
+
+        // Diacritics and apostrophes, which is the case `LibrarySearch.fold` handles by
+        // rewriting the string and this one cannot: the offsets have to keep addressing the
+        // original. `L'Oréal` before the hit is what would shift a folded answer.
+        let accented = [
+            DocumentRow(
+                index: 0,
+                kind: .paragraph(
+                    Paragraph(
+                        index: 0, number: 1,
+                        text: "L'Oréal's café process forms a Nestlé wrapper.",
+                        hasPrintedNumber: true)))
+        ]
+        var folded = DocumentFind()
+        folded.search("nestle", in: accented, near: nil)
+        log.equal(folded.matches.count, 1, "a diacritic should not defeat a match")
+        log.equal(
+            folded.matches.first.flatMap { match -> String? in
+                let row = accented[0].plainText
+                let lower = String.Index(utf16Offset: match.range.lowerBound, in: row)
+                let upper = String.Index(utf16Offset: match.range.upperBound, in: row)
+                return String(row[lower ..< upper])
+            },
+            "Nestlé",
+            "an accented match should address the accented text, not a folded copy")
+
+        // A claim is one row and three drawn pieces, so a highlight has to be cut to the
+        // piece and rebased onto it. The element hit is the one that matters: it is where
+        // most of a claim's words are.
+        let claim = Claim(
+            number: 1, text: "A method comprising:",
+            elements: [
+                ClaimElement(depth: 0, text: "heating a substrate;"),
+                ClaimElement(depth: 0, text: "cooling the substrate."),
+            ],
+            dependsOn: [], dependencySource: .none)
+        let claimRows = [DocumentRow(index: 0, kind: .claim(claim))]
+        var inClaim = DocumentFind()
+        inClaim.search("substrate", in: claimRows, near: nil)
+        log.equal(inClaim.matches.count, 2, "both elements should be searched")
+
+        let highlights = inClaim.highlights(in: 0)
+        let preamble = 0 ..< claim.text.utf16.count
+        log.check(
+            highlights.clipped(to: preamble).isEmpty,
+            "a hit in an element should not be drawn in the preamble")
+
+        let firstElement = claim.text.utf16.count + 1
+        let firstLength = claim.elements[0].text.utf16.count
+        let clipped = highlights.clipped(to: firstElement ..< firstElement + firstLength)
+        log.equal(clipped.ranges.count, 1, "the first element should get exactly its own hit")
+        log.equal(
+            clipped.ranges.first.map { range -> String in
+                let element = claim.elements[0].text
+                let lower = String.Index(utf16Offset: range.lowerBound, in: element)
+                let upper = String.Index(utf16Offset: range.upperBound, in: element)
+                return String(element[lower ..< upper])
+            },
+            "substrate",
+            "a clipped highlight should be rebased onto the piece it is drawn in")
+        log.equal(
+            clipped.current, clipped.ranges.first,
+            "the current match should survive being clipped to its own piece")
+
+        // The preamble half of the same split, from a query that is only in the preamble.
+        var inPreamble = DocumentFind()
+        inPreamble.search("comprising", in: claimRows, near: nil)
+        log.equal(
+            inPreamble.highlights(in: 0).clipped(to: preamble).ranges.count, 1,
+            "a hit in the preamble should be drawn in the preamble")
     }
 
     // MARK: - Selection
