@@ -342,14 +342,15 @@ struct PatentPDFReaderView: View {
     /// not go on being walked.
     private func open() async {
         await pdf.ensureDownloaded(patent)
-        guard case .onDisk(let file) = pdf.state(for: patent) else { return }
-        if document == nil || !opened(document!, is: file) {
-            document = PDFDocument(url: file)
+        guard case .onDisk(let file) = pdf.state(for: patent),
+            let (document, map) = pdf.openDocument(for: patent, at: file)
+        else { return }
+
+        if self.document !== document {
             // The marks belong to the pages of the document that just went away.
             marks.clear()
+            self.document = document
         }
-        guard let document else { return }
-        let map = pdf.map(for: patent)
         self.map = map
         // The query survives the switch and the matches cannot — see `PatentPDFFind.refind`.
         find.refind(in: document)

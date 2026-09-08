@@ -90,20 +90,17 @@ final class PatentPDFMarks {
     }
 
     /// Takes back every annotation this type added, and nothing else.
+    ///
+    /// **No `deinit` doing the same.** A `deinit` is not main-actor isolated and this object
+    /// is held in a view's `@State`, so it can be released on any thread; touching PDFKit
+    /// from there would be exactly the race `Coordinator`'s notification block goes out of
+    /// its way to avoid. It also has nothing to clean up: the annotations are on the pages of
+    /// a `PDFDocument` held by the same view, which is being released alongside it.
     func clear() {
         for (page, annotation) in added { page.removeAnnotation(annotation) }
         added = []
         applied = [:]
         drawn = nil
-    }
-
-    deinit {
-        // `added` holds the pages, so the annotations outlive this object unless they are
-        // taken off. Non-isolated, and every touch here is on objects nothing else holds a
-        // reference to by the time this runs.
-        MainActor.assumeIsolated {
-            for (page, annotation) in added { page.removeAnnotation(annotation) }
-        }
     }
 
     /// One line's mark.
