@@ -48,15 +48,6 @@ struct ContentView: View {
     /// restored `openPatent` implies it at launch.
     @State private var outline = LibraryOutline()
 
-    /// The face the *patent text* is set in; everything else stays on the system face.
-    @AppStorage("readerFont") private var readerFont: ReaderFont = .system
-    @AppStorage("readerTextSize") private var readerTextSize: ReaderTextSize = .default
-
-    /// Read here, and only so that the typeface is rebuilt when the reader moves the
-    /// Larger Text slider. At a non-default `readerTextSize` the text is drawn with a
-    /// *fixed-size* `Font.system(size:)`, which does not follow Dynamic Type on its own.
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
     #if !os(macOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
@@ -80,8 +71,6 @@ struct ContentView: View {
 
     @AppStorage("showsDiagnostics") private var diagnosticsPreference = false
     private var showsDiagnostics: Bool { diagnosticsPreference || options.diagnostics }
-
-    @State private var fonts = ReaderFontLibrary()
 
     // MARK: - Answer state
 
@@ -426,7 +415,6 @@ struct ContentView: View {
 
                 backForward
                 findButton
-                typefaceMenu
 
                 if showsDiagnostics {
                     Text("\(shortModelName) · on-device")
@@ -456,7 +444,6 @@ struct ContentView: View {
         private var readerToolbar: some ToolbarContent {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 loadStateIndicator
-                typefaceMenu
                 if isRegularWidth {
                     paneToggle(
                         "the answers", systemImage: "sidebar.trailing", shortcut: "2",
@@ -616,48 +603,6 @@ struct ContentView: View {
         }
     }
 
-    /// The face and size the patent is set in. A `Menu` of `Toggle`s and **not** a
-    /// `Picker`, for `ContentView`'s reason next door: picker rows are selection tags with
-    /// nowhere to hang a download or a retry affordance, and an `NSMenuItem` has exactly
-    /// one image slot, so a hand-drawn checkmark would displace the download glyph on the
-    /// row whose state matters.
-    @ViewBuilder
-    private var typefaceMenu: some View {
-        Menu {
-            Section("Typeface") {
-                ForEach(ReaderFont.offered, id: \.self) { font in
-                    Toggle(
-                        isOn: Binding(
-                            get: { font == readerFont }, set: { _ in choose(font) })
-                    ) {
-                        if let glyph = statusGlyph(font) {
-                            Label(font.displayName, systemImage: glyph)
-                        } else {
-                            Text(font.displayName)
-                        }
-                    }
-                    .help(fonts.failed[font] ?? "")
-                }
-            }
-
-            Section("Size") {
-                ForEach(ReaderTextSize.allCases, id: \.self) { size in
-                    Toggle(
-                        size.displayName,
-                        isOn: Binding(
-                            get: { size == readerTextSize },
-                            set: { _ in readerTextSize = size }))
-                }
-            }
-        } label: {
-            Image(systemName: "textformat")
-        }
-        .borderlessMenu()
-        .fixedSize()
-        .help("The face and size the patent is set in")
-        .accessibilityLabel("Reader typeface and size")
-    }
-
     #if os(macOS)
         @ViewBuilder
         private var diagnosticsMenu: some View {
@@ -672,19 +617,6 @@ struct ContentView: View {
             .accessibilityLabel("Diagnostics")
         }
     #endif
-
-    /// `nil` for a family that is installed and idle, which is the ordinary case and
-    /// wants no glyph at all.
-    private func statusGlyph(_ font: ReaderFont) -> String? {
-        if fonts.failed[font] != nil { return "exclamationmark.triangle" }
-        if fonts.downloading.contains(font) { return "arrow.down.circle.fill" }
-        return fonts.isAvailable(font) ? nil : "arrow.down.circle"
-    }
-
-    private func choose(_ font: ReaderFont) {
-        readerFont = font
-        if !fonts.isAvailable(font) { fonts.download(font) }
-    }
 
     @ViewBuilder
     private func paneToggle(

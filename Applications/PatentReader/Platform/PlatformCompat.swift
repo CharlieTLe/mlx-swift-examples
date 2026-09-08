@@ -13,47 +13,27 @@ import SwiftUI
 /// Everything the reader draws is otherwise the same code on both platforms, and the
 /// point of this file is to keep it that way: the platform split lives here and in the
 /// two places where the *layout* differs (`ContentView`'s container, and
-/// `DocumentReaderView`'s pointer gestures), not scattered through the view bodies.
+/// `PatentPDFView`'s two superclass names), not scattered through the view bodies.
+///
+/// It is a third of what it was, and the third that went is worth naming because it says
+/// what the app stopped doing rather than what it stopped needing a shim for.
+/// `PlatformFont` existed for `ReaderFont` to ask the system for a text style's point size;
+/// `isShiftKeyDown` for shift-clicking a row into a multi-row band; `selectableProse()` for
+/// turning system text selection on over the parsed prose. All three belonged to a reader
+/// that drew the patent itself, and the app now shows the office's own document, where
+/// PDFKit owns the type, the selection and the modifier keys.
 ///
 /// What is deliberately **not** here, because it needed no shim: `.help`,
 /// `.controlSize`, `.buttonStyle(.borderless)`, `.menuIndicator`,
 /// `.listStyle(.sidebar)`, `.focusEffectDisabled`, `.textSelection`,
-/// `.textFieldStyle(.plain)`, `.keyboardShortcut`, and the whole CoreText path in
-/// `ReaderFontLibrary`. All of them are available on both.
-
-/// The concrete font class, which is what `ReaderFont` needs to ask the system for a
-/// text style's point size. `NSFont.TextStyle` and `UIFont.TextStyle` spell their
-/// cases identically, so only the lookup call itself has to be written twice.
-#if os(macOS)
-    typealias PlatformFont = NSFont
-#else
-    typealias PlatformFont = UIFont
-#endif
-
-/// Whether shift is held *right now*.
-///
-/// Read from the event state rather than through `TapGesture().modifiers(.shift)`,
-/// which is unreliable, and because SwiftUI does not report modifiers on a move
-/// command at all. `false` on iOS: a hardware keyboard can hold shift, but there is
-/// no UIKit equivalent of `NSEvent.modifierFlags` to poll outside an event, and the
-/// long press on a row's **number margin** in `DocumentReaderView` is the touch
-/// affordance that replaces shift-click anyway. The margin rather than anywhere in the
-/// row, because the prose is selectable text and a long press on it belongs to the
-/// system's character selection.
-var isShiftKeyDown: Bool {
-    #if os(macOS)
-        NSEvent.modifierFlags.contains(.shift)
-    #else
-        false
-    #endif
-}
+/// `.textFieldStyle(.plain)` and `.keyboardShortcut`. All of them are available on both.
 
 /// Writes the pasteboard directly.
 ///
-/// macOS otherwise copies through `.onCopyCommand`, which hands the responder chain an
-/// `NSItemProvider` rather than writing the pasteboard itself — but a menu item is not a
-/// responder-chain command, so the word-lookup menu's Copy needs this on both platforms.
-/// `clearContents()` first, because `NSPasteboard` appends to whatever the last owner left.
+/// A keyboard shortcut on a `Button` is not a responder-chain command, so ⇧⌘C cannot hand
+/// back an `NSItemProvider` the way `.onCopyCommand` does; it has to write the pasteboard
+/// itself. `clearContents()` first, because `NSPasteboard` appends to whatever the last
+/// owner left.
 func copyToPasteboard(_ text: String) {
     #if os(macOS)
         NSPasteboard.general.clearContents()
@@ -84,26 +64,6 @@ var hasMLXDevice: Bool {
 }
 
 extension View {
-    /// Prose the reader can select characters in, on both platforms.
-    ///
-    /// A shim rather than `.textSelection(.enabled)` at each of the three call sites, because
-    /// the *interesting* fact is which text is **not** selectable — a heading, which is a
-    /// handle rather than prose — and naming that requires naming this.
-    ///
-    /// What it took to get here is worth recording, because the obvious diagnosis was wrong
-    /// twice. Turning selection on collided with the row sweep: one long press on a phone
-    /// produced grab handles *and* a five-row selection band, two selections of two different
-    /// things from one gesture. It also looked as though selectable text had broken scrolling —
-    /// a slow drag over the prose selected characters and moved the document not one point.
-    /// It had not. With selection turned back off the same drag still failed to scroll, and
-    /// still swept rows: the culprit was `SweepRecognizer`'s own long press, which a synthesized
-    /// drag arms because it dwells at its start point where a finger keeps moving. Scrolling was
-    /// never the text's fault, and the arbitration in `DocumentReaderView` is what fixes the
-    /// collision that was.
-    func selectableProse() -> some View {
-        textSelection(.enabled)
-    }
-
     /// `Menu` ignores `.buttonStyle(.borderless)`, hence `.menuStyle` on macOS. And
     /// `BorderlessButtonMenuStyle` is macOS-only, so iOS keeps the default style and
     /// takes the indicator alone. In a navigation bar the default style is already
