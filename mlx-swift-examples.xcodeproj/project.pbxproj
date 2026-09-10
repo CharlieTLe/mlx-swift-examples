@@ -244,6 +244,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				PatentReader/Annotation/AnswerCache.swift,
+				PatentReader/Annotation/AnswerDisplay.swift,
 				PatentReader/Annotation/AnswerPaneView.swift,
 				PatentReader/Annotation/AnswerService.swift,
 				PatentReader/Annotation/CitationCheck.swift,

@@ -14,12 +14,14 @@ import Foundation
 /// them would throw away the more interesting one.
 ///
 /// Model-free, network-free, and microseconds: a set membership and a dictionary lookup.
-/// It runs at commit time inside `CitationScanner`, so a chip is never rendered in an
+/// It runs at commit time inside `CitationScanner`, so a citation is never rendered in an
 /// unknown state.
 enum CitationCheck {
 
     enum Verdict: Sendable, Equatable, Hashable {
-        /// The target exists **and** was in the retrieved set. A clickable chip.
+        /// The target exists **and** was in the retrieved set. It becomes a numbered
+        /// footnote marker, and the office's own marker is not printed — see
+        /// `AnswerDisplay`.
         case supported
 
         /// The target exists, and the model was never shown it.
@@ -79,8 +81,8 @@ enum CitationCheck {
     /// prompt quality — and the residue they *cannot* see is worth stating in the same
     /// breath. A real, retrieved paragraph cited for a claim it does not make comes back
     /// `.supported` and always will. No string comparison reaches that, and the UI
-    /// should not imply otherwise: the chip is a promise that the model was shown this
-    /// paragraph, never that the paragraph says what the sentence claims.
+    /// should not imply otherwise: a footnote is a promise that the model was shown
+    /// this paragraph, never that the paragraph says what the sentence claims.
     static func tally(_ runs: [AnswerRun]) -> [Verdict: [String]] {
         var out: [Verdict: [String]] = [:]
         for case .citation(let citation) in runs {
