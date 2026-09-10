@@ -12,14 +12,16 @@ import SwiftUI
 /// arrived underneath them".
 ///
 /// What is new is the answer itself. `AnnotationPaneView` renders `Text(commentary)`,
-/// one flat string. Here every citation in that string is a chip the reader can click to
-/// land on the passage, which is the whole product — see `answerText`.
+/// one flat string. Here every cited clause ends in a numbered footnote marker that can
+/// be clicked to land on the passage that supports it, which is the whole product — see
+/// `answerText` and `AnswerDisplay`.
 @MainActor
 struct AnswerPaneView: View {
     struct Exchange: Identifiable, Equatable {
         let id = UUID()
         var question: String
-        /// Parsed as it streams, so a citation is a chip the moment it is whole.
+        /// Parsed as it streams, so the passage under a citation is linked the moment the
+        /// citation is whole.
         var runs: [AnswerRun]
         var tail: String
     }
@@ -42,6 +44,17 @@ struct AnswerPaneView: View {
     /// still registers as a change — a flag would already be `true` and `onChange` would
     /// not fire. The same reason `FlashHighlight` carries a `UUID`.
     let focusRequest: Int
+    /// Whether there is a selection in the document to summarize.
+    ///
+    /// The button stays *present* and goes disabled without one, rather than appearing when
+    /// a selection does — the same choice the iOS overflow's copy row makes. A control that
+    /// materializes only once you have already done the thing that enables it teaches nobody
+    /// that it is there.
+    let canSummarize: Bool
+    /// Summarize whatever is selected in the document. No argument, because the pane does
+    /// not know what is selected and should not: the reader view resolves the selection to
+    /// passages, for the reason `PatentPDFReaderView.onSelection` gives.
+    let onSummarize: () -> Void
     /// A question to ask. `isSuggestion` distinguishes a tapped row from a typed one,
     /// which is what decides whether it is answered from the same passages or searches
     /// again — see `ContentView.ask(_:isSuggestion:)`.
@@ -237,10 +250,10 @@ struct AnswerPaneView: View {
 
     // MARK: - The answer
 
-    /// The answer, with its citations as inline chips.
+    /// The answer, with each cited clause ending in the footnote marker for its evidence.
     ///
     /// **One `Text` and not an `HStack` of chips.** A citation belongs in the sentence it
-    /// supports — "the matrix is formed in one piece [0019] with the shells" — so it has
+    /// supports — "the matrix is formed in one piece [1] with the shells" — so it has
     /// to flow and wrap with the prose around it. A stack would put the citations in a
     /// row of their own, which is a bibliography rather than a citation, and it would
     /// break the line wherever a chip fell.
@@ -254,10 +267,20 @@ struct AnswerPaneView: View {
     /// The three verdicts are three renderings, and each one is the argument in
     /// `CitationCheck` made visible:
     ///
-    /// - `.supported` — tinted, underlined, clickable. The model was shown this passage.
-    /// - `.unretrieved` — tinted grey, **no link**. The paragraph is real, so it is not
-    ///   struck through; the connection is invented, so it does not click.
-    /// - `.nonexistent` — struck through, still legible. Reported, never removed.
+    /// - `.supported` — a **numbered footnote marker** where the citation was, clickable,
+    ///   with the office's own marker not printed. The model was shown this passage. See
+    ///   `AnswerDisplay`.
+    /// - `.unretrieved` — its marker, tinted grey, **no link**. The paragraph is real, so
+    ///   it is not struck through; the connection is invented, so it does not click.
+    /// - `.nonexistent` — its marker, struck through, still legible. Reported, never
+    ///   removed.
+    ///
+    /// **Nothing here overrides the link colour.** There used to be a belt-and-braces pair —
+    /// the run's own `foregroundColor = .primary` *and* `.tint(.primary)` on the `Text` — to
+    /// keep a linked run out of accent blue. That measurement was about keeping a whole
+    /// underlined *clause* out of it, and three characters is not a clause: the marker is the
+    /// only clickable thing in an answer and has to read as one, so it keeps the platform's
+    /// own link tint.
     @ViewBuilder
     private func answerText(runs: [AnswerRun], tail: String) -> some View {
         Text(attributed(runs: runs, tail: tail))
@@ -266,39 +289,39 @@ struct AnswerPaneView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The macOS tooltip is now **the only place the office's marker is still shown** for a
+    /// supported citation — `[0042]`, or `¶42 (numbered by this reader)`. That is worth
+    /// stating rather than leaving implied, because `setToolTip` is macOS-only: on iOS
+    /// there is no hover, so `[1]` is opaque until the reader taps it and lands on the
+    /// passage in the document itself.
     private func attributed(runs: [AnswerRun], tail: String) -> AttributedString {
         var out = AttributedString()
-        for run in runs {
-            switch run {
-            case .text(let text):
-                out += AttributedString(text)
-            case .citation(let citation):
-                var chip = AttributedString(citation.literal)
-                let range = chip.startIndex ..< chip.endIndex
-                switch citation.verdict {
-                case .supported:
-                    chip.foregroundColor = .accentColor
-                    chip.underlineStyle = Text.LineStyle.single
-                    chip.link = CitationLink(citation.target).url
-                    chip.setToolTip(
-                        Citation.string(citation.target, numbering: numbering), on: range)
-                case .unretrieved:
-                    chip.foregroundColor = .secondary
-                    chip.setToolTip(
-                        "This paragraph exists, but it was not among the passages the "
-                            + "model was shown — so nothing supports the connection.",
-                        on: range)
-                case .nonexistent:
-                    chip.foregroundColor = .secondary
-                    chip.strikethroughStyle = Text.LineStyle.single
-                    chip.setToolTip(
-                        "There is no such paragraph or claim in this library.", on: range)
-                }
-                out += chip
+        for span in AnswerDisplay.spans(runs, tail: tail) {
+            var piece = AttributedString(span.text)
+            guard let citation = span.citation else {
+                out += piece
+                continue
             }
+            let range = piece.startIndex ..< piece.endIndex
+            switch citation.verdict {
+            case .supported:
+                piece.link = CitationLink(citation.target).url
+                piece.setToolTip(
+                    Citation.string(citation.target, numbering: numbering), on: range)
+            case .unretrieved:
+                piece.foregroundColor = .secondary
+                piece.setToolTip(
+                    "This paragraph exists, but it was not among the passages the "
+                        + "model was shown — so nothing supports the connection.",
+                    on: range)
+            case .nonexistent:
+                piece.foregroundColor = .secondary
+                piece.strikethroughStyle = Text.LineStyle.single
+                piece.setToolTip(
+                    "There is no such paragraph or claim in this library.", on: range)
+            }
+            out += piece
         }
-        // The tail, always plain. See `CitationScanner`.
-        if !tail.isEmpty { out += AttributedString(tail) }
         return out
     }
 
@@ -357,12 +380,11 @@ struct AnswerPaneView: View {
     private var instructions: String {
         #if os(macOS)
             "Ask about the library, or select rows first to ask about a passage. ⌘L "
-                + "puts the keyboard here. Answers cite the paragraphs they come from; "
-                + "click a citation to go there, and ⌘[ to come back."
+                + "puts the keyboard here. Answers number the passages they come from; "
+                + "click a number to go there, and ⌘[ to come back."
         #else
             "Ask about the library, or select rows first to ask about a passage. "
-                + "Answers cite the paragraphs they come from; tap a citation to go "
-                + "there."
+                + "Answers number the passages they come from; tap a number to go there."
         #endif
     }
 
@@ -408,8 +430,43 @@ struct AnswerPaneView: View {
                 // another suggestion.
                 Divider()
             }
+            summarizeButton
             askField
         }
+    }
+
+    /// Summarize the selection, above the Ask field.
+    ///
+    /// **Here rather than in the reader's own toolbar**, which is where a selection action
+    /// would ordinarily go, and the reason is what the pane is: a summary *is* an answer in
+    /// every way that matters downstream — it streams into this transcript, its citations
+    /// link, it is cached, and it gets follow-ups — so the control that starts one belongs
+    /// beside the field that starts the other. The reader keeps ⇧⌘S and the phone keeps its
+    /// overflow row; this is the affordance that says the feature exists.
+    @ViewBuilder
+    private var summarizeButton: some View {
+        Button(action: onSummarize) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.append")
+                    .font(.caption)
+                Text("Summarize selection")
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(canSummarize ? .primary : .tertiary)
+        .disabled(isBusy || !canSummarize)
+        #if os(macOS)
+            .help("Summarize the passages you selected in the document (⇧⌘S)")
+        #endif
+        .accessibilityLabel("Summarize the selected passages")
+        .accessibilityHint(
+            canSummarize
+                ? "Summarizes the passages your selection covers."
+                : "Select text in the document first.")
     }
 
     @ViewBuilder

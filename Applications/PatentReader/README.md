@@ -80,7 +80,8 @@ Ask a question of the library and get prose back that cites `[0042]` and `claim 
 a brief does. Every citation is checked, and there are **three** answers rather than two:
 
 - **Supported** — the paragraph exists *and* was among the passages the model was shown.
-  A clickable chip.
+  The clause it supports ends in a numbered footnote marker — `[1]` — and that number is the
+  link; the office's own marker is not printed.
 - **Unretrieved** — the paragraph exists, and the model was never shown it. Rendered as
   plain text, **not a link**. The number is real, so striking it through would be the app
   calling the model a liar about something true; but the model did not read that
@@ -90,7 +91,7 @@ a brief does. Every citation is checked, and there are **three** answers rather 
   retrieved set was built from the retrieved passages alone, while `Prompts` also renders
   an **INDEPENDENT CLAIMS** block that `AnswerContext.Entry` assembles on purpose, so that
   a question about scope is answered against what is claimed. A model that read claim 1
-  there and cited it was told it had never been shown claim 1, and lost the chip. It hit
+  there and cited it was told it had never been shown claim 1, and lost the link. It hit
   precisely the question the block was added for — ask what a patent covers and every
   citation in the answer came back dead — which is why `retrieved` now unions the
   independent claims in.
@@ -108,11 +109,85 @@ click puts you in front of the actual paragraph, in the office's own PDF — and
 the whole design is for.
 
 An answer also **paints its evidence onto the document**: pale for the passages the model
-was shown, solid for the ones it cited, accent for the chip you just clicked. Each mark
+was shown, solid for the ones it cited, accent for the passage you just clicked. Each mark
 covers the whole passage rather than the words the anchor found it by. Three
 statements a reader needs at once, on the page rather than in a sidebar. A citation the
 model produced without being shown the paragraph is painted *nothing*, which is the same
-argument that already makes that chip unclickable.
+argument that already makes that citation unclickable.
+
+### Summarizing what you selected
+
+Drag across text in the PDF and **Summarize selection**, in the answer pane above the Ask
+field, says what those passages say — in the same cited prose an answer is written in, in the
+same transcript, with the same links back to the document. ⇧⌘S on a Mac, and a row in the
+overflow menu on a phone. The button is always there and goes grey without a selection,
+because a control that only appears once you have already done the thing that enables it
+teaches nobody it exists.
+
+This is the one thing the app does where **its central difficulty disappears**. The retrieval
+section below argues that a patent's own hierarchy is useless for finding an answer because
+"the reader asks a question and does not know where the answer is". A selection is the case
+where they do know. Nothing is searched, nothing is ranked, the embedder never loads — and on
+the Simulator, where there is no Metal device and retrieval degrades to keyword-only, a
+summary is not degraded at all, because no search happened to degrade. The pane says
+`3 passages` and does *not* say "keyword search only", which would be describing a search that
+never ran.
+
+**What is summarized is the passages your selection covers, not the characters you dragged**,
+and that is deliberately the opposite of what ⇧⌘C does. The two actions want different things
+and the difference is worth stating rather than smoothing over:
+
+- A **quotation** must be exactly what was selected, or it is not a quotation. So ⇧⌘C copies
+  half a sentence when you drag half a sentence, and says so when it cannot place it.
+- A **summary** must be *citable*, or this app cannot check a word of it. `AnswerContext`
+  pairs every passage with the label the model is told to cite it as, and `CitationCheck`
+  decides a verdict by testing a citation's target against that set. Hand the model raw
+  PDFKit characters and it has been shown text that addresses nothing: every citation comes
+  back `unretrieved`, unclickable, painted nothing. That is the machinery correctly reporting
+  that it cannot verify the summary, and building it that way on purpose would be strange.
+- The parse is also the only version of the document reliably **in order**. A drag down one
+  column of a two-column grant picks up the other in text-stream order. For a paste that is
+  acceptable, because the reader can see the scramble; a summary of scrambled prose is
+  confidently wrong and reads perfectly.
+
+So the cost is real and it is named on screen instead of hidden: a selection is rounded up to
+whole passages, and the exchange is headed with the range it actually summarized — `Summary of
+[0042] – [0044]`, from the same range rule ⇧⌘C's trailer uses, so the two can never give one
+selection two different accounts. The marks then do the rest of the telling: every selected
+passage pale, and solid on the ones the summary actually cited, so you can see which of what
+you pointed at it used.
+
+Three ways it declines, all reported and none silent:
+
+- **Nothing placeable.** A cover page, a figure caption, a table — outside every passage
+  there is, for the same 3% reason a citation sometimes cannot be landed. It **refuses** rather
+  than summarizing uncited, which is where it parts company with ⇧⌘C: a summary nobody can
+  check against the document is the one thing this app should not manufacture.
+- **An implausible span**, the two-column case, raises the band ⇧⌘C already raises and then
+  summarizes anyway — because the input came from the parse, so the scramble never reached the
+  model. All it can do is make the passage set wider than you meant, and the header shows that
+  it did.
+- **More than twelve passages** keeps the first twelve. A selection has no natural size; a drag
+  with the scrollbar can cover four hundred paragraphs, and that is a prompt nothing prefills
+  in a time anyone waits for.
+
+**The length had to scale, and that was measured rather than assumed.** The answering prompt
+asks for 60-140 words, which is right there because how long an answer runs has nothing to do
+with how much was retrieved. Reusing it here produced the worst output this path has: asked to
+summarize two one-sentence paragraphs and one claim — about 230 words, under a 60-word floor —
+the model returned the three passages **copied out verbatim behind their own citation labels**.
+186 words of transcription, three `supported` citations, and it reads exactly like a summary.
+That is `Prompts`'s own third finding arriving somewhere new: a floor makes the model leave the
+passage to meet it, and where there is nowhere to go it pads with the passage itself. So there
+is no floor at all now, and the ceiling is a third of the source's own length capped at 140.
+The same selection comes back as 47 words of paraphrase; the three substantial paragraphs it
+was checked against are unchanged at 115.
+
+A summary is an exchange like any other, which is the whole reason it is one: its citations
+link, its evidence paints, it is cached on the same digest, and "People also ask" follows it —
+so a follow-up runs on the passages you selected. The cache keys on the *purpose* as well as
+the question and the passages, so a summary and a question that happened to be worded like one
+cannot be served for each other.
 
 ### Getting patents in
 
@@ -182,7 +257,7 @@ documents to fetch by number instead.
 ### The markup is not uniform, and that shaped the model
 
 The plan for this app assumed Google Patents' markup was regular because one patent was
-checked. It is regular, in **four different ways**, and each one is a fixture in
+checked. It is regular, in **five different ways**, and each one is a fixture in
 `--selftest`:
 
 | Shape | Paragraph element | Printed number? | Fixture |
@@ -191,6 +266,22 @@ checked. It is regular, in **four different ways**, and each one is a fixture in
 | A′ | the same, but `class="description-line"` | yes | `US20140030575A1` |
 | B | `<div num="p-0002" class="description-paragraph">` | **no** — `num` holds the id | `US7654321B2` |
 | C | `<div class="description-paragraph">` | no | `US5000000A` |
+| D | `<div id="h-0010" num="0000" class="description-paragraph">` — a **heading**, not a paragraph | n/a | `US12018087B2` |
+
+**Shape D cost a patent its entire import**, and it is the sharpest example of why these are
+fixtures rather than assumptions. Google marks the headings *inside* a description —
+`A. Muscle-Targeting Agents`, `i. Muscle-Targeting Antibodies` — with the same class as a
+paragraph, distinguished only by `num="0000"` and an `h-` id instead of `p-`. Read as
+paragraphs, `US 12,018,087 B2`'s 33 headings put a `0` in among 313 otherwise ascending
+numbers, and the strictly-ascending guard refused the whole patent with *"Paragraph numbers
+stop ascending at 0"*. The refusal is correct behaviour for what it was shown; what it was
+shown was wrong. The parser's own comment had said *"Zero means none"* since the first
+version — it simply was not implemented, because no fixture had one. A fetch by number then
+fell through to the PDF path, and for that grant the office's PDF is a 161-page scan, so the
+visible symptom was a patent that imported with 1,288 synthesized paragraphs instead of 313
+printed ones. One attribute, four layers of consequence. The page uses **both** heading
+spellings at once — 18 `<heading>` elements above these 33 — so the two readings have to
+coexist rather than one replacing the other.
 
 Three consequences run through the whole app:
 
@@ -210,12 +301,57 @@ Three consequences run through the whole app:
 ### Citations tell you whose numbering they are
 
 Roughly half the patents this app can import arrive with no printed paragraph numbers at
-all. Where they do, a citation reads `US 10,123,456 B2 · [0042]` and a chip reads
-`[0042]`. Where they do not, the importer counts from 1 and says so: `US 6,285,999 B1 ·
-¶12 (numbered by this reader)`, with a chip that reads `¶12`. A bracketed number claims
-the patent office's authority and a pilcrow does not, so the two never look alike even at
-chip size — because a reader who copies `[0042]` into a brief and then opens the printed
-grant will not find it, and that would be a wrong citation this app caused.
+all. Where they do, a citation reads `US 10,123,456 B2 · [0042]`. Where they do not, the
+importer counts from 1 and says so: `US 6,285,999 B1 · ¶12 (numbered by this reader)`. A
+bracketed number claims the patent office's authority and a pilcrow does not, so the two
+never look alike — because a reader who copies `[0042]` into a brief and then opens the
+printed grant will not find it, and that would be a wrong citation this app caused.
+
+**Which is exactly why the marker is no longer the thing you click.** An answer used to read
+*"…including stress and smooth extensions. ¶279 of US 11,028,179 B2"*, and only those last
+characters were clickable. `¶279` is this reader's own count; the office's PDF prints nothing
+of the sort. So the app was handing the reader an address that exists nowhere but in this
+process, as the sole handle on the passage. Now a cited clause ends in a **numbered footnote
+marker** — *"the matrix is formed in one piece [1] with the shells"* — and the number is the
+link. The numbers count *distinct passages*, not citations, so a paragraph cited three times
+is `[1]` all three times, which is itself something worth being able to see. `AnswerDisplay`
+is the whole rule — the numbering, the one space before a marker, the `"()"` that an
+`"([0019])"` leaves behind, the paragraph break a citation on its own line has to keep — and
+it is a pure `[AnswerRun] -> [AnswerSpan]` function so `--selftest` can hold it to that.
+
+**A footnote is bracketed too, and that is less of a collision than it looks.** The rule just
+above is that `[0042]` claims the office's authority, and `[1]` is the same notation. In
+practice the two never blur: an office marker is four digits and zero-padded, and since only a
+suspect verdict still prints one it is also grey, while a footnote counts from 1 and is the
+only tinted, clickable thing in the answer. And a reader who copies `[1]` into a brief has
+plainly not copied a paragraph cite, which is the failure the rule exists to prevent. The
+spelling is one function — `AnswerDisplay.marker(_:)` — so if that judgement turns out to be
+wrong, a superscript `¹` or `[fn 1]` is a one-line change.
+
+The link sat on the **prose** for a while, with the cited clause underlined and no marker
+printed at all. An underline can show one thing a bracket cannot — the *extent* of what a
+citation covers — and it showed it worst exactly where it mattered. With a citation per clause
+an answer becomes adjacent underlines end to end, and a run of underlines is indistinguishable
+from one long one, so the *boundary* — where this citation's reach stops and the next begins —
+is the part that disappeared. A bracket is a boundary and nothing else.
+
+The office's marker has not gone anywhere; it has stopped being the handle. It is still in the
+macOS **tooltip** over the footnote, spelled in full — `US 10,123,456 B2 · ¶42 (numbered by
+this reader)` — and it is still printed in the document the reader lands on. **iOS loses the
+tooltip**, because there is no hover to raise one, so on a phone `[1]` is opaque until it is
+tapped: it says *there is evidence here* and nothing about which passage until the jump lands.
+That is a real loss and worth stating plainly. The fix, if it turns out to matter, is a
+footnote legend under the answer — `[1] US 10,123,456 B2 · ¶42` — deliberately not built yet,
+on the grounds that the passage itself is the answer and a legend is a second place to keep in
+sync with it.
+
+`.unretrieved` and `.nonexistent` citations **keep their markers**, unchanged, for the reason
+`CitationCheck` gives: those are the two verdicts this app reports rather than hides, and a
+verdict that is not a link has nothing else to be. A welcome side effect is that the only
+bracketed numbers left in an answer's prose are now the suspect ones. The diagnostics strip
+keeps them too — *"cited but not retrieved"*, *"cited and does not exist"*, *"cited and not
+found in the PDF"* all still name the marker, because a marker naming a passage in a
+diagnostics line is a different job from a marker standing in for a sentence in prose.
 
 **And a bracketed number has to be the office's own, down to its width.** USPTO zero-pads
 to four, so paragraph 100 is `[0100]`. WIPO writes `00` and then the number, so its
@@ -386,7 +522,7 @@ Four findings decided the design, each of which had a plausible wrong answer:
   taking the earliest candidate after the previous choice. A **geometric** ordinal `(page, y)`
   instead collapses on the two-column grant, 93 of 1241 placed, because reading order there
   is not top-to-bottom. When a target has no candidate after the cursor it is left unplaced
-  and **the cursor does not move**: one lost chip beats cascading a stray early match into
+  and **the cursor does not move**: one lost mark beats cascading a stray early match into
   everything after it.
 - **A claim anchors on its number plus its preamble.** `Claim.text` has the printed number
   stripped, because the old reader drew it in the margin; the office prints it, so putting
@@ -437,9 +573,35 @@ session of highlighting. `PatentPDFMarks` also tracks exactly the annotations it
 removes only those: an office PDF ships its own link annotations, and clearing
 `page.annotations` wholesale would vandalise the document on screen.
 
-One annotation per printed **line**, via `selectionsByLine()`. Not an optimisation — it makes
-more objects — but correctness: a multi-line selection's `bounds(for:)` is one union
-rectangle, which on a two-column grant covers the neighbouring column.
+One annotation per **page**, with one quad per printed **line**, via `selectionsByLine()`. The
+per-line geometry is the correctness half: a multi-line selection's `bounds(for:)` is one union
+rectangle, which on a two-column grant covers the neighbouring column. What changed is where
+those lines live. A PDF text markup highlight *is* one annotation whose `/QuadPoints` carries
+one quadrilateral per line; adding one `.highlight` per line, each with only `bounds` set and
+no quads, was a stack of annotation furniture down the page standing in for a single
+continuous mark, with the tooltip repeated on every line of it. An annotation belongs to
+exactly one page and an extent can cross a page break, so the grouping is per page.
+
+The quad **order** is settled by `PDFAnnotationUtilities.h` and is upper-left, upper-right,
+lower-left, lower-right — a 'Z', Acrobat's convention rather than PDF 1.7's nominal
+counter-clockwise one. The **origin** is settled by nothing: the same five lines say both *"in
+page space"* and *"Points are specified relative to the annotation's bound's origin"*, and the
+deprecated `PDFAnnotationMarkup.h` carries the contradiction word for word. So it was measured,
+by rendering one page of the real grant three times and diffing the pixels:
+
+| quads | changed pixels | on the line rects | in the gaps between them |
+|---|---|---|---|
+| **bounds-relative** | 6,284 | **99.7%** | 0.3% (antialiasing) |
+| absolute page space | 0 | — | — |
+| none, `bounds` only | 12,138 inside the union | 4,311 px | 7,827 px |
+
+Bounds-relative, then — and the wrong choice draws **nothing at all** rather than landing
+offset, because quads outside the annotation's own `/Rect` are clipped away. The last row is
+the control and the reason the quads are worth writing: one annotation with only `bounds`
+tints 7,827 pixels of gutter between the lines, which is exactly the column bleed the per-line
+geometry exists to avoid. PDFKit's renderer does honour the quads, which no header comment or
+DocC page says either way. The measurement is the same technique the `.highlight` translucency
+number below rests on, and `--selftest` cannot reach it: that suite is PDFKit-free by policy.
 
 **A mark covers the passage, not the needle.** For a while it covered the needle, which is six
 words — or, once anchoring moved to the printed markers, the bare `[00355]` and nothing else.
@@ -469,7 +631,7 @@ mark stops early. Fixing those is fixing the placement, not the extent — and o
 that anchors exactly, nothing comes up short at all.
 
 The jump still goes to the needle rather than the extent, because `PDFView.go(to:)` scrolls to
-make a selection visible and the precise landing is the point of a citation chip.
+make a selection visible and the precise landing is the point of clicking a citation.
 
 #### When a passage cannot be located
 
@@ -486,17 +648,83 @@ places this app already reports things:
 
 Deliberately *not* a fourth `CitationCheck.Verdict`. The verdicts are model-free, PDFKit-free
 and decided at commit time inside `CitationScanner`, and a case that depended on a document
-being open — and on a map having finished walking it — would break all three at once. A chip
+being open — and on a map having finished walking it — would break all three at once. A link
 whose paragraph exists and was retrieved is a good citation whatever this app can do with a
 PDF; that it cannot land on it is a fact about the app, and it is reported as one.
 
 Plus one document-wide diagnostics line, `anchored 428/437 paragraphs · 106/120 claims`, so a
 new document shape that drops to 60% is visible rather than mysterious. That failure is
-otherwise *quiet*: chip by chip it looks exactly like a handful of unlucky paragraphs.
+otherwise *quiet*: citation by citation it looks exactly like a handful of unlucky paragraphs.
+
+#### When the office publishes a photograph
+
+Some grants have no text layer at all. `US 12,018,087 B2` is published — by the office, and by
+Google Patents, byte for byte the same 8,693,851-byte file — as 161 pages of CCITT Group 4 fax
+images produced by `libtiff / tiff2pdf`, with no fonts and no text operators. `PDFPage.string`
+returns **0 characters across all 161 pages**. Everything above depends on searching the
+document's text, so on a scan every citation in every answer would report *"cited and not found
+in the PDF"* and no mark would ever be painted. Roughly a third of US grants before the
+mid-2000s are scans; this is not one document's problem.
+
+So a document with no text layer is **recognised** — Vision's `VNRecognizeTextRequest`, once,
+cached beside the PDF as `<number>.ocr.json` — and the anchoring runs against that instead.
+
+**The recognised text is an index and never the document.** The obvious implementation is an
+invisible text layer, which is what every OCR tool writes and which would make every part of
+this app work unchanged. It was rejected: invisible text is *real* text to PDFKit, so ⌘F would
+search it, a drag would select it, and ⇧⌘C would copy it under a citation naming the office's
+document — handing the reader a recogniser's guess as the patent's own words. That is exactly
+the "looks fine and is not" failure the importer refuses elsewhere. `ScannedTextIndex` is
+therefore never rendered, never selectable and never copied, and is used for two things only:
+finding a passage, and knowing which lines to paint. On a scan, ⌘F and text selection stay
+dead, because there genuinely is no text on the page — and saying so is better than faking it.
+
+Four measurements shaped it, all on that grant:
+
+| | placed, of 313 paragraphs |
+|---|---|
+| the ordinary rule (lines joined by newline, six words) | 257 — 83.4% |
+| **+ normalised text**: lines joined by a space, hyphenation across a line end rejoined | 269 — 87.3% |
+| **+ bounded rescue**: 5, then 4, then 3 words, only between two placed neighbours | 283 — 91.9% |
+| the same, end to end through `--anchor` | **289 — 92.3%**, claims 19/27 |
+
+Both wins come from *owning* the index rather than asking `PDFDocument.findString`. A needle no
+longer has to fit inside one printed line, and a search can be **bounded** — which is what makes
+a three-word needle safe, because the window between two placements is one paragraph wide rather
+than 161 pages. Every rescued placement lands strictly inside a bracket the first pass already
+ordered, so the ascending invariant `PassagePlacement.monotonic` guarantees is preserved by
+construction; measured over the whole document, 0 violations.
+
+Two more things had to be measured rather than assumed:
+
+- **The gutter is found from ink, not assumed at the midpoint.** Vision reads a page roughly
+  top-to-bottom, so on a two-column grant it interleaves the columns — and it will merge a
+  left-column line with a right-column one into a single observation, which corrupts the text
+  *and* gives the mark a rect spanning the gutter. Recognising each column separately fixed
+  both: lines straddling the page midline fell from **2,364 of 3,839 to 90**. The gutter is the
+  widest wholly-clear band near the centre, and on this grant it is 17 px at 200 dpi — **1.0% of
+  the page width**, which is why the floor is 0.6% and not the 1.5% first guessed, and why a page
+  must be dense enough to be body text before it is a candidate at all. A drawing sheet is mostly
+  white, so every band of one reads as a gutter.
+- **Fold once, then search `.literal`.** Asking `range(of:)` for `[.caseInsensitive,
+  .diacriticInsensitive]` makes every comparison Unicode-aware, and anchoring runs 340 needles
+  over 435,000 characters: **26.39 s**, against the 0.3–2.6 s a text layer costs. Folding both
+  sides once up front — with an exact per-character map back, since folding is not
+  length-preserving — brings it to **1.68 s** for the same 289 placements.
+
+Recognition itself is 0.24 s a page, 38 s for the 161-page grant, paid once and cached. It is
+the one part of this that `--selftest` cannot reach: the index and the gutter detector are pure
+and are asserted there, but the recognition needs a real scan and there is none in this
+repository. `--anchor` is where that number comes from.
+
+The honest bottom line: **92% against the 97% a real text layer gets.** The missing 8% reports
+itself through the three mechanisms above, and the diagnostics line says `· from recognised
+text` so that 92% reads as the good outcome it is on a scan rather than as a regression.
 
 #### The rest of the reader
 
-- **Every jump lands here**: a citation chip, `[0042]` typed into the library field, a
+- **Every jump lands here**: a footnote number in an answer, `[0042]` typed into the library
+  field, a
   section picked from the outline, a claim cross-reference, and ⌘[ / ⌘]. A section has no
   heading row to scroll to in a PDF, so it aims at the section's **first passage** — `claim 1`
   for the Claims sentinel — which puts the heading one line above the fold and inherits the
@@ -541,7 +769,7 @@ bookkeeping:
 - **Accessibility.** The parsed reader gave Dynamic Type over the body text, four typefaces,
   five sizes, system text selection, and a document VoiceOver could read. A PDF reflows for
   nobody; pinch-zoom on a two-column grant is not a substitute, and annotations announce
-  nothing. The answer pane's chips remain the accessible route to a passage. This is the one
+  nothing. The answer pane's links remain the accessible route to a passage. This is the one
   item that would argue for keeping the parsed view behind a preference, and it was decided
   rather than discovered.
 - **Word lookup.** Double-clicking a term of art and getting the system dictionary is gone
@@ -577,6 +805,15 @@ time to first token, so nothing here wants an approximate index.
 Prompts run 1,500-2,200 tokens against ShakespeareReader's 526-1,023, which is what
 retrieved patent prose costs. The first thing to shed if that grows is the chunk count
 (8 → 6), not the independent claims.
+
+**A summary is cheaper than a question, and on the one axis that matters most it is free.**
+Measured with `--summarize` against US 12,018,087 B2: two one-sentence paragraphs and claim 1
+is 883 prompt tokens and **0.64 s** to first token; three of its longest description
+paragraphs is 2,743 tokens and 1.88 s. So the range straddles the answering path's rather than
+sitting under it — a selection can carry more words than eight retrieved chunks — but there is
+**no retrieval leg at all**, so nothing waits on the embedder and nothing pays the 182 ms it
+costs to load, on a phone or on the Simulator. The passage count is the whole lever here, and
+it is capped at twelve for exactly that reason.
 
 Indexing a 41-paragraph patent, a 164-paragraph one and a 58-paragraph one — 302 chunks —
 took **21 s including the embedder download**, and the documents were readable the whole
@@ -640,7 +877,7 @@ On the **Simulator** everything except the two models works, and that is more us
 than next door: MLX has no Metal device there, so the app degrades to **lexical-only
 retrieval**, which needs no GPU. BM25 answers reference-numeral and term-of-art questions
 well on its own, the answer pane says *keyword search only* rather than letting a thinner
-search look like a normal one, and the whole library, reader and citation-chip UI can be
+search look like a normal one, and the whole library, reader and citation UI can be
 developed there.
 
 ## Verifying
@@ -658,6 +895,8 @@ APP=$(xcodebuild -configuration Release -showBuildSettings -scheme PatentReader 
 "$APP" --patent US10123456B2 --claim 7
 "$APP" --anchor US10123456B2         # anchor its stored PDF and report how well it went
 "$APP" --show-prompt --patent US10123456B2 --ask "how is the matrix formed?"
+"$APP" --summarize --patent US10123456B2 --paragraph 19 --paragraph 20
+"$APP" --show-prompt --summarize --patent US10123456B2 --paragraph 19   # prompt, then stop
 "$APP" --benchmark
 "$APP" --greedy        # temperature 0, for prompt A/B work
 ```
@@ -666,10 +905,18 @@ The flags are read by `EntryPoint` before SwiftUI starts, so they need the execu
 inside the bundle rather than `open`, and not `./mlx-run PatentReader ...`, which
 backgrounds an app scheme with `&` and loses the exit code.
 
-`--selftest` is model-free, network-free and **PDFKit-free**, and covers twenty-one
+`--summarize` is the summary path's probe, and it stands beside `--anchor` for the same
+reason `--anchor` exists: the named paragraphs stand in for a drag, because a terminal has
+none, and everything after that is the real path — the same context builder, prompt, session
+and citation verdicts. It prints the prompt tokens, time to first token and the citation
+tally, so a change to the summary prompt can be read and then measured. `--paragraph` and
+`--claim` repeat, which is how the ordering and the twelve-passage cap get exercised; the
+selection-to-passages leg is the manual checklist's.
+
+`--selftest` is model-free, network-free and **PDFKit-free**, and covers twenty-four
 suites, including:
 
-- **`originalPDFLink`** — the `citation_pdf_url` read out of each of the four fixtures,
+- **`originalPDFLink`** — the `citation_pdf_url` read out of each of the five fixtures,
   asserted down to the filename, plus the rejections: `http:`, `file:` and `javascript:`
   URLs, an empty meta, a page with no such meta, and an entity-escaped query proving the
   decoding is `HTMLScanner`'s. The assertion that earns it its place is that **at least one
@@ -680,7 +927,7 @@ suites, including:
   simplification and then 404s for a quarter of a library.
 - **`passageAnchors`** — the needles, which is where the app's central promise is defended
   in a form a build can check. Where the office printed markers a paragraph's needle is that
-  marker, asserted to be the very string the chip shows — the two rendering a width
+  marker, asserted to be the very string the tooltip shows — the two rendering a width
   differently would name one paragraph and land on another — with the six words demoted to
   the fallback and keeping every rule they had. Where it printed none, the six words are
   still the needle and there is no fallback, which is the branch that must not go looking
@@ -713,11 +960,25 @@ suites, including:
   from, recovers a working PDF link. The four unavailable reasons are asserted for their
   copy as well as their verdict — the two with a remedy have to still name it, so a reword
   that drops "fetch it again" fails the build rather than a reader's afternoon.
-- **`googlePatentsParse`** — four checked-in HTML fixtures, one per markup shape, asserted
+- **`scannedText`** — the index over recognised text and the gutter detector, both pure
+  arithmetic and neither touching PDFKit or Vision, which is what lets them be here at all.
+  Lines joined by a space and hyphenation across a line end rejoined, so a needle spanning a
+  line break is found; a bounded search that excludes a hit outside its window, which is the
+  rescue pass's whole safety argument; one rect per printed line and never the union, with the
+  first and last trimmed in proportion to where the passage starts and ends. Then the gutter,
+  against synthetic histograms: a two-column page found near its true centre, a single-column
+  page refused, a four-pixel band refused as word spacing, text on one side only refused — and
+  **a sparse page refused**, which is the guard measurement forced, because a drawing sheet is
+  mostly white and every band of one reads as a gutter. What is *not* here is recognition
+  itself: that needs a real scan, and the 92% comes from `--anchor`.
+- **`googlePatentsParse`** — five checked-in HTML fixtures, one per markup shape, asserted
   against measured counts. The markup-drift alarm. Counts rather than a byte-compared
   golden document, deliberately: a golden would also fail for the hundred cosmetic
   differences a whitespace fix makes, and a test that fails cosmetically gets regenerated
-  without being read.
+  without being read. The fifth fixture, `US12018087B2`, is the one that was **not
+  importable at all** until shape D above was read as a heading, and it is 1.4 MB of HTML
+  earning its place by pinning 313 paragraphs, 51 sections and printed numbering on a page
+  that produced none of them.
 - **`claimTree`** — every dependency resolves, nothing cycles, nothing depends forward,
   and **every dependent claim reaches an independent one**. The last is the one worth
   having: a claim whose chain does not terminate draws flush left as though it were
@@ -740,6 +1001,19 @@ suites, including:
   well as a US one — ten digits, no grouping commas, an `A9` kind code — and so is the
   prose that merely looks like the opening of one: `[0019 of the shells]` cites nothing,
   which is the hole the first draft of the fix left open and the suite caught.
+- **`answerDisplay`** — what the reader actually sees, driven through the scanner one
+  character at a time so the two are tested composed the way the app composes them. The
+  marker for a `.supported` citation must *disappear* from the prose and the citation must
+  never disappear with it, which are the two directions this can go wrong in: the plain case,
+  a link reaching back over two whole sentences (the decision, so it gets the assertion that
+  defends it), a mid-sentence citation leaving exactly one space at the seam, a trailing one
+  where `finish()` puts it, two citations in a row and an answer opening with one falling
+  back to their literals, `.unretrieved` and `.nonexistent` keeping theirs, a link that
+  refuses to cross a paragraph break, and the `"()"` that `"([0019])"` would otherwise leave
+  behind. Then the invariant over a corpus: every citation reachable from exactly one span,
+  and the assembled prose equal to the committed prose minus exactly the literals that were
+  dropped — streaming and whole asserted to agree, or a cache hit would render differently
+  from the generation that produced it.
 - **`indexIntegrity`** — over synthetic deterministic vectors, so it stays model-free:
   every entry names something that exists, every indexable paragraph has an entry,
   dimensions agree, no non-finite values, every vector is unit length, and the base64
@@ -748,10 +1022,23 @@ suites, including:
 - **`citationCheck`** — all three verdicts, including a paragraph of a *different* patent
   in the library (real, so `unretrieved`) and one of a patent that is not (so
   `nonexistent`).
+- **`answerContextSelection`** — the context a summary is built from, and the two assertions
+  that earn it its place both defend a decision against a future tidy-up rather than a bug
+  that happened. `retrieved` must be **exactly** the passages the reader selected, because
+  the natural "make it consistent" edit is to union the independent claims in the way the
+  answering path does — which would let a summary of `[0042]` paint a solid mark on claim 1
+  and call it evidence. And a summary must **digest differently from a question** over the
+  same passages, because the answer cache is keyed on that digest and the two render
+  different prompts. Plus document order out of shuffled input, one passage from a target
+  repeated, a nonexistent target dropped rather than turned into an empty passage, the
+  twelve-passage cap, and a claim keeping its printed number.
 - Plus `patentNumbers`, `citations` — extended for the quotation a PDF selection copies,
-  including the uncited one that says so — `chunking`, `lexicalRetrieval`,
-  `pdfParagraphRecovery`, `librarySearch`, `goldenPromptRender`, and the ported
-  `quoteCheck`, `followUpParsing` and `readingProgress`.
+  including the uncited one that says so, and for the span label a summary is headed with,
+  which shares its range rule so the two cannot describe one selection differently —
+  `chunking`, `lexicalRetrieval`, `pdfParagraphRecovery`, `librarySearch`,
+  `goldenPromptRender` — which pins the summary prompt as well as the answering one, and
+  asserts that the summary asks no question, carries no claims block and does not call its
+  passages retrieved — and the ported `quoteCheck`, `followUpParsing` and `readingProgress`.
 
 **`--fetch` and `--anchor` are the checks `--selftest` cannot be.** The fixtures are checked
 in, which is what makes the self test fast and hermetic and also means it can only detect
@@ -777,17 +1064,29 @@ increased-memory-limit entitlement are all device-only; and everything below, no
 `--selftest` can reach.
 
 - **The marks.** Ask a question and confirm pale marks on the eight retrieved passages,
-  solid on the ones the answer cited, and the accent on the chip you just clicked. An
-  `.unretrieved` chip paints nothing, which is the point. Each mark must cover **the whole
-  passage** and stop at its end — not the first line, and not into the paragraph below. On a
-  two-column grant confirm it stays inside its own column, which is what `selectionsByLine()`
-  is for and the one thing a union rectangle gets visibly wrong. Then `cmp` the `.source.pdf`
-  before and after a session of highlighting: **the bytes must not have moved.**
-- **The jump.** Click each chip and land on the paragraph, ⌘[ back. A cross-patent citation.
-  `[0042]` in the library field. A section from the outline. A claim cross-reference. And a
-  chip whose paragraph cannot be located — force one by editing a `.json` paragraph's first
-  words — which must scroll to the neighbour, raise the band naming it, and add the third
-  tally line.
+  solid on the ones the answer cited, and the accent on the passage you just clicked. An
+  `.unretrieved` citation paints nothing, which is the point. Each mark must cover **the whole
+  passage** and stop at its end — not the first line, and not into the paragraph below — and
+  be **one** annotation per page per passage, continuous rather than a stack of per-line
+  bands, with one tooltip for the whole thing. On a two-column grant confirm it stays inside
+  its own column, which is what the per-line quads are for and the one thing a union rectangle
+  gets visibly wrong. Then `cmp` the `.source.pdf` before and after a session of highlighting:
+  **the bytes must not have moved.**
+- **The answer's numbers.** The prose is plain body text — **no underlines anywhere in the
+  answer** — and each cited clause ends in `[1]`, `[2]`, … with exactly one space before the
+  bracket and no double space after, so a citation before a full stop reads *"…one piece [1]."*
+  A passage cited twice shows the **same number** both times. No `[0042]` or `¶279` is printed
+  for a supported citation, while an `.unretrieved` one still shows its number as plain grey
+  text and a `.nonexistent` one is still struck through: confirm at a glance that a grey
+  `[0041]` does not read as a footnote. A multi-paragraph answer keeps its blank lines, and a
+  citation the model put on its own line stays on that line. A follow-up turn renders the same
+  way, and a **cache hit** renders identically to the stream that produced it.
+- **The jump.** Click each footnote number and land on the paragraph, ⌘[ back. Hovering one
+  still raises `US 10,123,456 B2 · ¶42 (numbered by this reader)`. A cross-patent
+  citation. `[0042]` in the library field. A section from the outline. A claim
+  cross-reference. And a citation whose paragraph cannot be located — force one by editing a
+  `.json` paragraph's first words — which must scroll to the neighbour, raise the band naming
+  it, and add the third tally line.
 - **Anchoring, on shapes the probes did not cover.** `--anchor` a patent fetched by number
   (parse from Google, PDF from `patentimages`) and one imported from a PDF, and read the
   rate. A **scanned** pre-1976 grant with no text layer: everything reports, the diagnostics
@@ -797,11 +1096,33 @@ increased-memory-limit entitlement are all device-only; and everything below, no
 - **Selection.** Drag text → "ask about this" scopes to the patent. ⇧⌘C copies with a
   citation; a **front-page** selection copies uncited *and says so*; a drag down one column of
   a two-column grant raises the implausible-span band. ⌘C stays PDFKit's own.
+- **Summarizing a selection**, which is the one leg `--summarize` cannot reach, because it
+  starts from a drag. The button is grey with nothing selected and live with something, and
+  goes grey again while a summary is streaming; ⇧⌘S does the same and collides with nothing;
+  the phone's overflow row matches. Drag half a sentence inside one paragraph → the header
+  reads `Summary of [0042]` and the caption `1 passage`, which is the rounding-up being
+  *named* rather than hidden. Drag across three → `[0042] – [0044]`, `3 passages`. **The
+  header must never name a passage that is not in the prompt.** Confirm the cited sentences
+  underline and jump, that every selected passage is pale with the cited ones solid, and that
+  **no claim is marked** unless you selected one. Then the two refusals: a figure caption or
+  cover page must raise the band and generate **nothing**, and a two-column drag must raise the
+  implausible-span band and still summarize in document order. A summary must never say
+  "keyword search only". Summarize the same selection twice → the second is a cache hit and
+  renders identically. Tap a "People also ask" row → a follow-up on the same passages. Esc
+  cancels and leaves the streamed text. And on the phone, check the button does not push the
+  Ask field off the inspector's medium detent.
 - **Storage and the eager download.** Fetch a patent and check the library directory: a
   `.json`, a `.source.html` **and** a `.source.pdf`, all three there before the patent is
   readable. Then turn the Wi-Fi off and open it — it must read, offline. Drop a PDF and the
-  `.source.pdf` `cmp`s equal to the file dropped. Delete the patent and all four files go,
-  index included. `NOTICE.md` names the PDF.
+  `.source.pdf` `cmp`s equal to the file dropped. Delete the patent and all five files go,
+  index and `.ocr.json` included. `NOTICE.md` names the PDF.
+- **A scanned grant.** `--fetch US12018087B2`, open it, and watch the reader say it is
+  reading the pages; then confirm the marks land on the right lines and a footnote number
+  jumps. `--anchor US12018087B2` must report `from recognised text` and about 289/313. Open
+  it a second time: the `.ocr.json` is there, and nothing is re-read. Confirm ⌘F finds
+  nothing and a drag selects nothing — there is no text on the page, and the app must not
+  pretend otherwise. Then `cmp` the `.source.pdf`: **recognising a document must not touch
+  its bytes.**
 - **The retroactive case.** Import two patents on `main`, switch to this branch, launch: both
   gain a working PDF from HTML already on disk, with no re-import, one at a time as they are
   opened.
@@ -838,13 +1159,21 @@ increased-memory-limit entitlement are all device-only; and everything below, no
   every list, so the model type yields.
 - **A citation is a `link`, not a `Button`.** `Text` will not host a button, so a tappable
   run inside flowing prose has to be an attributed `link`, intercepted by an
-  `OpenURLAction` that returns `.handled` so nothing reaches the system. The document's
-  same `patentreader://` scheme also addresses reference numerals and claim
-  cross-references, and `ContentView.open(_:)` still routes them, though nothing draws one
-  now that the parsed prose is gone. Citations **flow and wrap with the prose** rather than
-  sitting in a row of chips, which is what a citation has to do.
+  `OpenURLAction` that returns `.handled` so nothing reaches the system. The marker has to
+  sit *in* the sentence it closes — `…in one piece [1] with the shells` — so it has to
+  **flow and wrap with the prose**, and a row of chips would be a bibliography instead.
+  The document's same `patentreader://` scheme also addresses reference
+  numerals and claim cross-references, and `ContentView.open(_:)` still routes them, though
+  nothing draws one now that the parsed prose is gone.
+- **The marker keeps the platform's link colour.** There was a belt-and-braces pair here for
+  a while — `foregroundColor = .primary` on the run *and* `.tint(.primary)` on the `Text`,
+  both measured to work, since `link` is a *Foundation*-scope attribute and `foregroundColor`
+  a *SwiftUI*-scope one and either could stop being honoured. That was in service of keeping
+  a whole underlined *clause* out of accent blue, which would have recoloured most of an
+  answer. Three characters is not a clause: the footnote is the only clickable thing in the
+  answer and has to read as one, so both overrides are gone and it is tinted like a link.
 - **A jump carries a fresh identity, not a target.** `PassageFocus` holds a `UUID`, so
-  clicking the same chip twice moves the reader twice; a bare `CitationTarget` would be "no
+  clicking the same footnote twice moves the reader twice; a bare `CitationTarget` would be "no
   change" the second time and the click would appear to do nothing. The old row reader's
   `FlashHighlight` carried the same `UUID` for the same reason.
 - **A programmatic jump does not select.** `PDFView.go(to: PDFSelection)` scrolls and leaves
@@ -865,7 +1194,9 @@ increased-memory-limit entitlement are all device-only; and everything below, no
   there is one, the original PDF as `<number>.source.pdf`, under
   `~/Library/Application Support/PatentReader/`. The HTML is what makes a
   `parserVersion` bump a re-parse rather than another request to somebody else's server.
-  `remove` drops all three together with the patent's index file, for the reason it always
+  A scanned PDF gains a fourth file, `<number>.ocr.json` — the recognised text, which is
+  derived data and so is kept beside the office's bytes rather than written into them.
+  `remove` drops all four together with the patent's index file, for the reason it always
   has: what is left behind is invisible, because nothing lists that directory — and an
   orphaned PDF is invisible *and* several megabytes. `NOTICE.md` there is rewritten on
   every change and records what was fetched, from where, when, and whether its PDF is kept.

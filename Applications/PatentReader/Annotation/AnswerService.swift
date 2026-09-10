@@ -47,6 +47,14 @@ enum AnswerEvent: Sendable {
     case cached(CachedAnswer)
     case phase(Phase)
     case retrieved([RetrievedChunk])
+    /// The passages a summary rests on, in document order.
+    ///
+    /// A summary's counterpart to `retrieved`, and a separate case rather than a reuse of
+    /// it: a `RetrievedChunk` carries a dense and a lexical score, nothing searched for
+    /// these, and fabricating two scores so the existing case would fit would put invented
+    /// numbers into the diagnostics strip. What the reader is owed here is only *which*
+    /// passages, which is what the marks and the passage count are drawn from.
+    case summarizing([CitationTarget])
     case promptTokens(Int)
     case answer(String)
     case followUps([String])
@@ -314,89 +322,9 @@ final class AnswerService {
                 return
             }
 
-            if !ignoringCache,
-                let entry = await cache.answer(for: context.digest)
-            {
-                continuation.yield(.phase(.cached))
-                continuation.yield(.cached(entry))
-                let restored = Conversation(
-                    context: context,
-                    session: rehydratedSession(container, context: context, entry: entry),
-                    needsHistoryPrefill: true)
-                restored.answer = entry.answer
-                restored.followUpsRaw = entry.followUpsRaw
-                restored.followUps = entry.followUps
-                restored.asked = Set(entry.followUps.map(Prompts.FollowUps.normalized))
-                conversation = restored
-                continuation.yield(.followUps(entry.followUps))
-                continuation.finish()
-                return
-            }
-
-            let session = ChatSession(
-                container,
-                instructions: Prompts.answererInstructions,
-                generateParameters: presets.answer,
-                additionalContext: Self.nonThinking)
-            let current = Conversation(context: context, session: session)
-            conversation = current
-
-            let request = Prompts.answerRequest(context)
-            current.promptTokenCount = await Self.tokenCount(
-                container: container,
-                instructions: Prompts.answererInstructions,
-                user: request)
-            continuation.yield(.promptTokens(current.promptTokenCount))
-            continuation.yield(.phase(.prefilling))
-
-            do {
-                var stopReason: GenerateStopReason?
-                for try await item in session.streamDetails(to: request) {
-                    if let chunk = item.chunk {
-                        continuation.yield(.phase(.answering))
-                        current.answer += chunk
-                        continuation.yield(.answer(chunk))
-                    }
-                    if let info = item.info {
-                        stopReason = info.stopReason
-                        continuation.yield(.stats(Self.stats(info)))
-                    }
-                }
-
-                // Partial output is never cached: only a stream that reached `.info`
-                // with a stop reason other than `.cancelled` produced a whole answer.
-                guard stopReason != nil, stopReason != .cancelled, !Task.isCancelled
-                else {
-                    continuation.finish()
-                    return
-                }
-
-                report(quotesIn: current.answer, against: current, to: continuation)
-
-                continuation.yield(.phase(.listingFollowUps))
-                let followUps = try await requestFollowUps(current)
-                continuation.yield(.followUps(followUps))
-
-                await cache.store(
-                    CachedAnswer(
-                        schemaVersion: AnswerCache.schemaVersion,
-                        promptVersion: Prompts.version,
-                        modelID: modelID,
-                        contextDigest: context.digest,
-                        question: context.question,
-                        answer: current.answer,
-                        followUpsRaw: current.followUpsRaw,
-                        followUps: followUps,
-                        generatedAt: Date(),
-                        promptTokenCount: current.promptTokenCount))
-            } catch is CancellationError {
-                // Stopped by the reader; whatever streamed already stays on screen.
-            } catch {
-                continuation.yield(.failed(String(describing: error)))
-            }
-
-            continuation.yield(.phase(.idle))
-            continuation.finish()
+            await respond(
+                with: context, container: container, ignoringCache: ignoringCache,
+                to: continuation)
         }
 
         // Cancelling the consumer has to cancel the generation. This closure is
@@ -405,6 +333,167 @@ final class AnswerService {
         continuation.onTermination = { _ in work.cancel() }
         activeTask = work
         return stream
+    }
+
+    // MARK: - Summarizing
+
+    /// Streams a cited summary of the passages the reader selected in the document.
+    ///
+    /// **There is no retrieval leg, and that is the feature rather than an optimization.**
+    /// `Retriever`'s header carries the argument that a patent's own hierarchy is useless
+    /// for finding an answer because "the reader asks a question and does not know where the
+    /// answer is". A selection is the case where they do know: nothing has to be found,
+    /// nothing has to be ranked, no embedder has to load, and the summary is grounded in
+    /// exactly what the reader pointed at. It is `PassageContext` next door, arriving here
+    /// by a different route.
+    ///
+    /// Everything after the context is `answer`'s, unchanged — see `respond`.
+    func summarize(
+        _ targets: [CitationTarget], in patent: Patent, ignoringCache: Bool = false
+    ) async -> AsyncStream<AnswerEvent> {
+        await displaceActiveWork().finish()
+
+        let (stream, continuation) = AsyncStream<AnswerEvent>.makeStream()
+
+        let work = Task { @MainActor in
+            guard let container else {
+                continuation.yield(.failed(AnswerError.notLoaded.localizedDescription))
+                continuation.finish()
+                return
+            }
+
+            // Refused rather than summarized from the raw selection, which is the one place
+            // this path can fail and the reason it fails loudly. A summary this app cannot
+            // cite is a summary nobody can check against the document, and making checking
+            // cheap is what the whole design is for.
+            guard let context = AnswerContext.selection(targets, in: patent) else {
+                continuation.yield(
+                    .failed(
+                        "None of that selection could be placed in a passage of "
+                            + "\(patent.key.display), so there is nothing to summarize "
+                            + "that could be cited."))
+                continuation.yield(.phase(.idle))
+                continuation.finish()
+                return
+            }
+            continuation.yield(.summarizing(context.passages.map(\.target)))
+
+            await respond(
+                with: context, container: container, ignoringCache: ignoringCache,
+                to: continuation)
+        }
+
+        continuation.onTermination = { _ in work.cancel() }
+        activeTask = work
+        return stream
+    }
+
+    // MARK: - The generation both paths share
+
+    /// Everything that happens once a context exists: the cache, the session, the stream,
+    /// the quote check and the follow-ups.
+    ///
+    /// Extracted so `answer` and `summarize` differ *only* in how they arrive at a context —
+    /// one searches for it, the other is handed a selection — and share every line after it.
+    /// Three things in here are load-bearing and each is easy to get subtly wrong in a
+    /// second copy: the cache's four-way key, the guard that never stores a partial answer,
+    /// and the rule that a cancelled `ChatSession` is never reused.
+    ///
+    /// Which prompt gets rendered is read off `context.purpose` rather than passed in, so a
+    /// summary context cannot be handed the answering request or the other way about.
+    private func respond(
+        with context: AnswerContext,
+        container: ModelContainer,
+        ignoringCache: Bool,
+        to continuation: AsyncStream<AnswerEvent>.Continuation
+    ) async {
+        if !ignoringCache,
+            let entry = await cache.answer(for: context.digest)
+        {
+            continuation.yield(.phase(.cached))
+            continuation.yield(.cached(entry))
+            let restored = Conversation(
+                context: context,
+                session: rehydratedSession(container, context: context, entry: entry),
+                needsHistoryPrefill: true)
+            restored.answer = entry.answer
+            restored.followUpsRaw = entry.followUpsRaw
+            restored.followUps = entry.followUps
+            restored.asked = Set(entry.followUps.map(Prompts.FollowUps.normalized))
+            conversation = restored
+            continuation.yield(.followUps(entry.followUps))
+            continuation.finish()
+            return
+        }
+
+        let session = ChatSession(
+            container,
+            instructions: Prompts.answererInstructions,
+            generateParameters: presets.answer,
+            additionalContext: Self.nonThinking)
+        let current = Conversation(context: context, session: session)
+        conversation = current
+
+        let request =
+            switch context.purpose {
+            case .question: Prompts.answerRequest(context)
+            case .summary: Prompts.summaryRequest(context)
+            }
+        current.promptTokenCount = await Self.tokenCount(
+            container: container,
+            instructions: Prompts.answererInstructions,
+            user: request)
+        continuation.yield(.promptTokens(current.promptTokenCount))
+        continuation.yield(.phase(.prefilling))
+
+        do {
+            var stopReason: GenerateStopReason?
+            for try await item in session.streamDetails(to: request) {
+                if let chunk = item.chunk {
+                    continuation.yield(.phase(.answering))
+                    current.answer += chunk
+                    continuation.yield(.answer(chunk))
+                }
+                if let info = item.info {
+                    stopReason = info.stopReason
+                    continuation.yield(.stats(Self.stats(info)))
+                }
+            }
+
+            // Partial output is never cached: only a stream that reached `.info`
+            // with a stop reason other than `.cancelled` produced a whole answer.
+            guard stopReason != nil, stopReason != .cancelled, !Task.isCancelled
+            else {
+                continuation.finish()
+                return
+            }
+
+            report(quotesIn: current.answer, against: current, to: continuation)
+
+            continuation.yield(.phase(.listingFollowUps))
+            let followUps = try await requestFollowUps(current)
+            continuation.yield(.followUps(followUps))
+
+            await cache.store(
+                CachedAnswer(
+                    schemaVersion: AnswerCache.schemaVersion,
+                    promptVersion: Prompts.version,
+                    modelID: modelID,
+                    contextDigest: context.digest,
+                    question: context.question,
+                    answer: current.answer,
+                    followUpsRaw: current.followUpsRaw,
+                    followUps: followUps,
+                    generatedAt: Date(),
+                    promptTokenCount: current.promptTokenCount))
+        } catch is CancellationError {
+            // Stopped by the reader; whatever streamed already stays on screen.
+        } catch {
+            continuation.yield(.failed(String(describing: error)))
+        }
+
+        continuation.yield(.phase(.idle))
+        continuation.finish()
     }
 
     /// A follow-up on the same session, against the same retrieved passages.

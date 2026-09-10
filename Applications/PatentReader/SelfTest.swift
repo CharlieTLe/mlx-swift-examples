@@ -41,6 +41,7 @@ enum SelfTest {
         patentNumbers(log)
         citations(log)
         citationScanner(log)
+        answerDisplay(log)
         citationCheck(log)
         chunking(log)
         lexicalRetrieval(log)
@@ -56,10 +57,12 @@ enum SelfTest {
         librarySearch(log)
         passageAnchors(log)
         passagePlacement(log)
+        scannedText(log)
         highlightPlan(log)
         passageLookup(log)
         quoteCheck(log)
         followUpParsing(log)
+        answerContextSelection(log)
         goldenPromptRender(log)
         readingProgress(log)
 
@@ -92,6 +95,16 @@ enum SelfTest {
     ///   number. This is the fixture that killed "post-2001 means numbered".
     /// - `US5000000A` is a 1991 grant with no paragraph numbers and **no `claim-ref` at
     ///   all**, so its claim tree has to come from the claims' own wording.
+    /// - `US12018087B2` is a 2024 grant that **could not be imported at all** until the
+    ///   parser learned its fifth shape: Google marks the headings *inside* a description —
+    ///   `A. Muscle-Targeting Agents` — as `description-paragraph` divs carrying `num="0000"`
+    ///   and an `h-` id, and read as paragraphs those 33 headings put a `0` in among 313
+    ///   ascending numbers. `numberingOutOfOrder` then refused the whole patent, which sent a
+    ///   fetch by number down the PDF fallback — and for this grant the office's PDF is a
+    ///   161-page scan. One attribute, and the difference between a document with printed
+    ///   numbering, 51 sections and a claim graph, and no document at all. It is also the
+    ///   only fixture whose page uses **both** heading spellings at once, 18 `<heading>`
+    ///   elements above these 33.
     private struct Fixture {
         let name: String
         let paragraphs: Int
@@ -138,6 +151,11 @@ enum SelfTest {
             sections: 34, numbering: .synthesized, dependencySource: .text,
             assignee: "University of Florida", numerals: 1,
             pdfFilename: "US5000000.pdf", unanchorableParagraphs: 0),
+        Fixture(
+            name: "US12018087B2", paragraphs: 313, claims: 27, independentClaims: 1,
+            sections: 51, numbering: .printed, dependencySource: .markup,
+            assignee: "Dyne Therapeutics Inc", numerals: 2,
+            pdfFilename: "US12018087.pdf", unanchorableParagraphs: 0),
     ]
 
     /// The fixtures directory, copied whole as an explicit folder — see the project's
@@ -573,6 +591,25 @@ enum SelfTest {
             "something off a cover page\n\nUS 10,123,456 B2 "
                 + "(this reader could not tell which passage this is)",
             "a selection that could not be placed")
+
+        // MARK: The label a summary is headed with
+
+        // The short form of the same rule, over the same spans. It shares `span(_:)` with the
+        // quotation above precisely so that these two can never describe one selection
+        // differently — a reader who summarizes a drag and then copies it sees one account of
+        // what they selected, not two.
+        log.equal(
+            Citation.spanLabel([first], numbering: .printed), "[0001]",
+            "a one-passage span label")
+        log.equal(
+            Citation.spanLabel([first, first, second], numbering: .printed),
+            "[0001] – [0002]", "a two-passage span label, deduplicated")
+        log.equal(
+            Citation.spanLabel([first], numbering: .synthesized), "¶1",
+            "a span label must carry this reader's own numbering as a pilcrow")
+        log.check(
+            Citation.spanLabel([], numbering: .printed) == nil,
+            "an empty span produced a label")
         log.check(
             !Citation.quotation(patent, text: "x", targets: []).contains("·"),
             "an unplaced selection must not carry a passage citation")
@@ -791,6 +828,274 @@ enum SelfTest {
         log.equal(
             bare.compactMap { if case .citation(let c) = $0 { c.target.patent } else { nil } },
             [key], "an unqualified citation resolves to the primary patent")
+    }
+
+    /// What the reader actually sees: **a numbered footnote marker where the citation was,
+    /// and the office's own marker not printed**.
+    ///
+    /// Driven through the scanner rather than over hand-built `[AnswerRun]`, and one
+    /// character at a time, so the suite tests the transform composed the way the app
+    /// composes it. The rule it defends is one the app cannot be allowed to get wrong in
+    /// either direction: a `.supported` marker must be *replaced* by a footnote number, and a
+    /// citation must never disappear with it — `CitationCheck`'s doctrine is that this app
+    /// reports citations and never strips them. The numbers count distinct passages, so the
+    /// same paragraph cited twice is the same number twice.
+    private static func answerDisplay(_ log: Log) {
+        let key = PatentKey(country: "US", serial: "10123456", kind: "B2")
+        let library = [fakePatent(key, paragraphs: [19, 22, 41], claims: [1, 7])]
+        let context = fakeContext(
+            question: "how is the matrix formed?",
+            retrieved: [
+                .paragraph(ParagraphKey(patent: key, number: 19)),
+                .paragraph(ParagraphKey(patent: key, number: 22)),
+                .claim(ClaimKey(patent: key, number: 7)),
+            ],
+            patents: [key])
+
+        /// The scanner, one character at a time, exactly as `citationScanner` feeds it.
+        func scan(_ text: String) -> [AnswerRun] {
+            var scanner = CitationScanner(context: context, library: library)
+            for character in text { scanner.consume(String(character)) }
+            scanner.finish()
+            return scanner.runs
+        }
+
+        func scanWhole(_ text: String) -> [AnswerRun] {
+            var scanner = CitationScanner(context: context, library: library)
+            scanner.consume(text)
+            scanner.finish()
+            return scanner.runs
+        }
+
+        func spans(_ text: String) -> [AnswerSpan] {
+            AnswerDisplay.spans(scan(text), tail: "")
+        }
+
+        func rendered(_ spans: [AnswerSpan]) -> String { spans.map(\.text).joined() }
+
+        /// The spans a reader can click: the footnote markers, in the order they are printed.
+        func linked(_ spans: [AnswerSpan]) -> [String] {
+            spans.filter { $0.citation?.verdict == .supported }.map(\.text)
+        }
+
+        // MARK: The plain case
+
+        let plain = spans("The matrix is formed in one piece [0019]")
+        log.equal(linked(plain), ["[1]"], "the citation renders as a numbered marker")
+        log.equal(
+            rendered(plain), "The matrix is formed in one piece [1]",
+            "the office's marker is replaced by the footnote's")
+        log.check(
+            !rendered(plain).contains("[0019]"),
+            "the office's marker for a supported citation is still in the prose")
+
+        // MARK: The seam
+
+        let midSentence = spans("in one piece [0019] with the shells")
+        log.equal(linked(midSentence), ["[1]"], "a mid-sentence citation is one marker")
+        log.equal(
+            rendered(midSentence), "in one piece [1] with the shells",
+            "exactly one space survives on each side of the seam")
+        log.check(
+            !rendered(midSentence).contains("  "),
+            "the renumbered marker left a double space behind")
+
+        // A citation at the very end of an answer, which is where `finish()` puts one.
+        let trailing = spans("as set out in [0022]")
+        log.equal(linked(trailing), ["[1]"], "a trailing citation is still numbered")
+        log.equal(rendered(trailing), "as set out in [1]", "and the marker ends the answer")
+
+        // Every marker is a bare number in brackets, with one space before it and no double
+        // space anywhere — which is the whole of the spacing rule, on every shape of seam.
+        for text in [
+            "The matrix is formed in one piece [0019]",
+            "in one piece [0019] with the shells", "as set out in [0022]",
+            "one piece [0019] and, separately, claim 7 says so.",
+            "The matrix is formed in one piece ([0019]).", "[0019][0022]",
+        ] {
+            let result = spans(text)
+            for (index, span) in result.enumerated()
+            where span.citation?.verdict == .supported {
+                log.check(
+                    span.text.first == "[" && span.text.last == "]"
+                        && Int(span.text.dropFirst().dropLast()) != nil,
+                    "a marker in \"\(text)\" is not a bracketed number: \"\(span.text)\"")
+                guard index > 0 else { continue }
+                let before = result[index - 1].text.last
+                log.check(
+                    before == " " || before == "\n",
+                    "a marker in \"\(text)\" is not preceded by exactly one space")
+            }
+            log.check(
+                !rendered(result).contains("  "), "\"\(text)\" rendered a double space")
+        }
+
+        // MARK: The numbering
+
+        // Two citations in a row, and an answer that opens with one. There is no prose
+        // between them, and the markers are still both printed and both distinguishable.
+        let adjacent = spans("[0019][0022]")
+        log.equal(rendered(adjacent), "[1] [2]", "two markers in a row need a space between")
+        log.equal(
+            adjacent.filter { $0.citation != nil }.count, 2, "\"[0019][0022]\" lost a citation")
+
+        let pair = spans("[0019] and [0022] both say so.")
+        log.equal(
+            rendered(pair), "[1] and [2] both say so.", "the numbers count up across an answer")
+        log.equal(
+            pair.filter { $0.citation != nil }.count, 2,
+            "\"[0019] and [0022] both say so.\" lost a citation")
+
+        let opening = spans("[0019] confirms it.")
+        log.equal(
+            rendered(opening), "[1] confirms it.",
+            "an answer opening with a citation opens flush with its marker")
+        log.equal(linked(opening), ["[1]"], "and that marker is the link")
+
+        // **A number names a passage, not a citation.** ¶19 cited twice is `[1]` both times,
+        // and the numbers are handed out in the order the reader meets them.
+        let reuse = spans(
+            "The matrix is one piece [0019], as claim 7 requires, and the shells bond "
+                + "to it [0019].")
+        log.equal(
+            rendered(reuse),
+            "The matrix is one piece [1], as [2] requires, and the shells bond to it [1].",
+            "a passage cited twice is numbered twice")
+        log.equal(linked(reuse), ["[1]", "[2]", "[1]"], "the repeat cite got a new number")
+        log.equal(
+            reuse.compactMap(\.citation).map(\.target),
+            [
+                .paragraph(ParagraphKey(patent: key, number: 19)),
+                .claim(ClaimKey(patent: key, number: 7)),
+                .paragraph(ParagraphKey(patent: key, number: 19)),
+            ],
+            "the numbers are not in first-seen order")
+
+        // MARK: The verdicts that keep their marker
+
+        let suspect = spans("Real and unshown [0041]. Invented [0099].")
+        log.equal(
+            rendered(suspect), "Real and unshown [0041]. Invented [0099].",
+            "a line with no supported citation must render exactly as written")
+        log.check(
+            rendered(suspect).contains("[0041]"),
+            "an unretrieved citation lost its marker")
+        log.check(
+            rendered(suspect).contains("[0099]"),
+            "a nonexistent citation lost its marker")
+        log.equal(
+            linked(suspect), [], "a suspect citation must not link anything")
+
+        // MARK: A paragraph break the spacing rule could eat
+
+        // A citation the model put on its own line stays on it: the pass that guarantees one
+        // space before a marker trims only *horizontal* whitespace, or it would pull the
+        // marker up onto the end of the paragraph above.
+        log.equal(
+            rendered(spans("The matrix is one piece.\nSee [0019]")),
+            "The matrix is one piece.\nSee [1]", "the paragraph break did not survive")
+        log.equal(
+            rendered(spans("The matrix is one piece.\n[0019]")),
+            "The matrix is one piece.\n[1]",
+            "a marker alone on its line was pulled up onto the line above")
+        log.equal(
+            rendered(spans("One.\nTwo.\nThree [0022] follows.")),
+            "One.\nTwo.\nThree [1] follows.", "the breaks around a mid-line marker moved")
+
+        // MARK: The bracket pair the model leaves behind
+
+        let parenthesised = spans("The matrix is formed in one piece ([0019]).")
+        log.equal(
+            rendered(parenthesised), "The matrix is formed in one piece [1].",
+            "the empty pair left by the replaced literal survived")
+        log.check(
+            !rendered(parenthesised).contains("("),
+            "\"(\" is a visible artefact of replacing the literal")
+
+        // MARK: The invariant
+
+        // Every citation is reachable from exactly one span, and the prose is neither lost
+        // nor duplicated: the assembled text is the committed text with each supported
+        // literal swapped for its number — ignoring the whitespace and the empty pairs the
+        // transform is allowed to tidy.
+        func squeeze(_ text: String) -> String {
+            var out = text.filter { !$0.isWhitespace }
+            while let range = out.range(of: "()") ?? out.range(of: "[]") {
+                out.removeSubrange(range)
+            }
+            // `"([0019])"` loses its parentheses around the marker while a suspect literal
+            // keeps its own, so normalise a parenthesis hugging a bracket away on both sides.
+            // The pair has its own assertion above; this comparison is about the prose.
+            return
+                out
+                .replacingOccurrences(of: "([", with: "[")
+                .replacingOccurrences(of: "])", with: "]")
+        }
+
+        for text in [
+            "The matrix is formed in one piece [0019] with the shells, and claim 7 "
+                + "limits that to expansion plugs.",
+            "[0019][0022] and then [0041].", "Nothing is cited here at all.",
+            "one piece ([0019]) and ([0099]).", "A.\nB [0022].\n\nC [0041] and claim 7.",
+            "Invented [0099] beside real [0019], as set out in [0022]",
+            "the range [0.5, 2.0] millimetres, see [0019]",
+            "one piece [0019] and again [0019], but claim 7 [0022].",
+        ] {
+            for runs in [scan(text), scanWhole(text)] {
+                let result = AnswerDisplay.spans(runs, tail: "")
+                let carried = result.compactMap(\.citation)
+                let committed = runs.compactMap {
+                    if case .citation(let c) = $0 { c } else { nil }
+                }
+                log.equal(
+                    carried, committed,
+                    "\"\(text)\": the spans do not carry every citation exactly once")
+
+                // The numbering rule, written a second time and by hand: that is what makes
+                // this a check on `AnswerDisplay` rather than a restatement of it.
+                var numbers: [CitationTarget: Int] = [:]
+                var expected = ""
+                for run in runs {
+                    switch run {
+                    case .text(let value):
+                        expected += value
+                    case .citation(let citation):
+                        guard citation.verdict == .supported else {
+                            expected += citation.literal
+                            continue
+                        }
+                        let number = numbers[citation.target] ?? (numbers.count + 1)
+                        numbers[citation.target] = number
+                        expected += "[\(number)]"
+                    }
+                }
+                log.equal(
+                    squeeze(rendered(result)), squeeze(expected),
+                    "\"\(text)\": the prose was lost or duplicated")
+            }
+        }
+
+        // Streaming and whole must agree here too, or a cache hit renders differently from
+        // the generation that produced it — including the numbering, which is order-stable
+        // only because the table is filled as the runs are walked.
+        for text in [
+            "The matrix is formed in one piece [0019] with the shells.",
+            "one piece ([0019]) and claim 7.", "A.\nB [0022].",
+            "one piece [0019], claim 7, and [0019] again.",
+        ] {
+            log.equal(
+                AnswerDisplay.spans(scan(text), tail: ""),
+                AnswerDisplay.spans(scanWhole(text), tail: ""),
+                "\"\(text)\" renders differently from a cache hit")
+        }
+
+        // The tail is always plain, and it is still shown. See `CitationScanner`.
+        let withTail = AnswerDisplay.spans(scan("in one piece [0019]"), tail: " and [00")
+        log.equal(
+            rendered(withTail), "in one piece [1] and [00",
+            "the tail is dropped or relinked")
+        log.check(
+            withTail.last?.citation == nil, "the tail was rendered as a link")
     }
 
     /// The three verdicts, against a synthetic library.
@@ -1879,6 +2184,182 @@ enum SelfTest {
             "stepping through nothing")
     }
 
+    /// Reading a scanned document: the index over recognised text, and the gutter detector.
+    ///
+    /// Both halves are pure arithmetic and neither touches PDFKit or Vision, which is what
+    /// lets them live in this suite at all. What cannot be here is the recognition itself —
+    /// the 92% placement rate on `US 12,018,087 B2` comes from `--anchor` on a real scan, and
+    /// there is no PDF in this repository to take it from.
+    private static func scannedText(_ log: Log) {
+        func line(_ text: String, y: CGFloat, x: CGFloat = 100, width: CGFloat = 200)
+            -> ScannedLine
+        {
+            ScannedLine(
+                text: text, rect: CGRect(x: x, y: y, width: width, height: 10))
+        }
+
+        func index(_ pages: [[ScannedLine]]) -> ScannedTextIndex {
+            ScannedTextIndex(
+                ScannedText(columns: pages.map { _ in 2 }, pages: pages))
+        }
+
+        // MARK: Normalising
+
+        // **The win that owning the index buys.** A needle no longer has to fit inside one
+        // printed line, which on a two-column grant is about 62 characters. Measured on the
+        // scanned grant: 257 placements become 269.
+        let wrapped = index([
+            [
+                line("The matrix is formed in one", y: 700),
+                line("piece with the shells.", y: 690),
+            ]
+        ])
+        log.equal(
+            wrapped.pages[0].string, "The matrix is formed in one piece with the shells.",
+            "lines are joined by a space")
+        log.equal(
+            wrapped.find("in one piece with").count, 1,
+            "a needle spanning a line break is found")
+
+        // Hyphenation across a line end, rejoined — and only lowercase to lowercase, exactly
+        // as `PatentPDFImporter.tidy` decides it, so a real hyphenated compound survives.
+        let hyphenated = index([
+            [line("over, an isolated antibody was More-", y: 700), line("over safe.", y: 690)]
+        ])
+        log.check(
+            hyphenated.pages[0].string.contains("Moreover safe."),
+            "a word broken across the line end was not rejoined: "
+                + "\"\(hyphenated.pages[0].string)\"")
+        let compound = index([[line("an anti-", y: 700), line("Transferrin receptor", y: 690)]])
+        log.check(
+            compound.pages[0].string.contains("anti- Transferrin"),
+            "a hyphen before a capital is not a line break and must survive")
+
+        // MARK: Finding
+
+        let document = index([
+            [line("Alpha beta gamma", y: 700), line("delta epsilon", y: 690)],
+            [line("Alpha beta gamma again", y: 700)],
+        ])
+        log.equal(document.find("Alpha beta").count, 2, "a needle found on two pages")
+        log.equal(
+            document.find("ALPHA BETA").count, 2, "the search is case-insensitive")
+        log.equal(document.find("nowhere").count, 0, "a needle that is not there")
+
+        // Bounded, which is what makes the rescue pass safe: the window is one paragraph
+        // wide, so a three-word needle cannot land forty pages away.
+        log.equal(
+            document.find("Alpha beta", from: Candidate(page: 0, offset: 5)).count, 1,
+            "a lower bound excludes the earlier hit")
+        log.equal(
+            document.find("Alpha beta", to: Candidate(page: 1, offset: 0)).count, 1,
+            "an upper bound excludes the later hit")
+        log.equal(
+            document.find(
+                "Alpha beta", from: Candidate(page: 0, offset: 5),
+                to: Candidate(page: 1, offset: 0)
+            ).count, 0, "a window with nothing in it")
+
+        // MARK: Drawing
+
+        // One rect per printed line, never the union — a union on a two-column grant covers
+        // the neighbouring column, which is `PatentPDFMarks`' whole argument.
+        let painted = index([
+            [
+                line("Alpha beta gamma", y: 700),
+                line("delta epsilon zeta", y: 690),
+                line("eta theta iota", y: 680),
+            ]
+        ])
+        let all = painted.lines(
+            from: Candidate(page: 0, offset: 0),
+            to: Candidate(page: 0, offset: painted.length(ofPage: 0)))
+        log.equal(all.count, 1, "one entry per page")
+        log.equal(all.first?.rects.count, 3, "one rect per printed line")
+
+        // A passage that stops inside the second line paints two, and the second is trimmed
+        // horizontally rather than drawn whole.
+        let partial = painted.lines(
+            from: Candidate(page: 0, offset: 0), to: Candidate(page: 0, offset: 22))
+        log.equal(partial.first?.rects.count, 2, "a passage ending mid-line paints two lines")
+        if let second = partial.first?.rects.last {
+            log.check(
+                second.width < 200 && second.width > 0,
+                "the last line should be trimmed to where the passage ends, got "
+                    + "width \(second.width)")
+            log.equal(second.minX, 100, "and trimmed from the right, not the left")
+        }
+
+        // A passage starting mid-line begins where it begins.
+        let offsetStart = painted.lines(
+            from: Candidate(page: 0, offset: 8), to: Candidate(page: 0, offset: 16))
+        if let first = offsetStart.first?.rects.first {
+            log.check(first.minX > 100, "a passage starting mid-line should not paint from 0")
+        }
+
+        // MARK: Walking
+
+        log.equal(
+            document.advance(Candidate(page: 0, offset: 0), by: 5),
+            Candidate(page: 0, offset: 5), "advancing inside a page")
+        let over = document.advance(Candidate(page: 0, offset: 0), by: 10_000)
+        log.equal(over.page, 1, "advancing past the end lands on the last page")
+
+        // MARK: The gutter
+
+        /// A histogram: `width` columns, `ink` in the text bands and nothing in the gutter.
+        func histogram(width: Int, gutter: Range<Int>?, density: Int, oneSided: Bool = false)
+            -> [Int]
+        {
+            var ink = [Int](repeating: density, count: width)
+            let margin = Int(Double(width) * 0.06)
+            for x in 0 ..< margin { ink[x] = 0 }
+            for x in (width - margin) ..< width { ink[x] = 0 }
+            if let gutter { for x in gutter where x < width { ink[x] = 0 } }
+            if oneSided { for x in (width / 2) ..< width { ink[x] = 0 } }
+            return ink
+        }
+
+        let width = 1700
+        // A real two-column grant: measured, the wholly clear band is 17 px at 200 dpi.
+        let twoColumn = histogram(width: width, gutter: 840 ..< 857, density: 74)
+        if let found = ScannedPageOCR.gutter(ink: twoColumn, width: width, height: 2200) {
+            log.check(
+                abs(found - 848) < 12, "the gutter should be found near 848, got \(found)")
+        } else {
+            log.fail("a two-column page's gutter was not found")
+        }
+
+        log.check(
+            ScannedPageOCR.gutter(
+                ink: histogram(width: width, gutter: nil, density: 74), width: width,
+                height: 2200) == nil,
+            "a single-column page must not be split")
+
+        // **The guard measurement forced.** A drawing sheet is mostly white, so every band of
+        // it reads as a gutter — and splitting one would recognise each half separately and
+        // cut every full-width line in two.
+        log.check(
+            ScannedPageOCR.gutter(
+                ink: histogram(width: width, gutter: 700 ..< 1000, density: 3), width: width,
+                height: 2200) == nil,
+            "a sparse page must not be treated as two columns")
+
+        // Narrower than 0.6% of the page is word spacing, not a gutter.
+        log.check(
+            ScannedPageOCR.gutter(
+                ink: histogram(width: width, gutter: 848 ..< 852, density: 74), width: width,
+                height: 2200) == nil,
+            "a four-pixel band is a word space, not a gutter")
+
+        // One column of text beside an empty half is one column.
+        log.check(
+            ScannedPageOCR.gutter(
+                ink: histogram(width: width, gutter: 840 ..< 857, density: 74, oneSided: true),
+                width: width, height: 2200) == nil,
+            "text on one side of the band only is not two columns")
+    }
+
     /// Which passages an answer paints on the document, and — the interesting half — which
     /// it refuses to.
     private static func highlightPlan(_ log: Log) {
@@ -2134,6 +2615,119 @@ enum SelfTest {
     /// This is what catches prompt drift: any change to the labelled blocks, the passage
     /// headings or the closing contract shows up here as a diff, and the fix is to
     /// regenerate this string *deliberately*, alongside a `Prompts.version` bump.
+    /// `AnswerContext.selection` — the context a summary is built from.
+    ///
+    /// The two assertions that earn this suite its place are the last two, and both defend a
+    /// decision against a future tidy-up rather than a bug that happened. `retrieved` must be
+    /// *exactly* the selected passages, because the natural "consistency" edit is to union the
+    /// independent claims in as `build` does, and that would let a summary of paragraph 42
+    /// paint a solid mark on claim 1 and call it evidence. And a `.summary` context must
+    /// digest differently from a `.question` one over the same passages, because the answer
+    /// cache is keyed on that digest and the two prompts produce different prose.
+    private static func answerContextSelection(_ log: Log) {
+        guard let patent = parsed("US10123456B2") else {
+            log.fail("could not load US10123456B2 for the selection context")
+            return
+        }
+
+        let p19 = CitationTarget.paragraph(ParagraphKey(patent: patent.key, number: 19))
+        let p21 = CitationTarget.paragraph(ParagraphKey(patent: patent.key, number: 21))
+        let claim2 = CitationTarget.claim(ClaimKey(patent: patent.key, number: 2))
+
+        // Shuffled in, document order out — and claims after paragraphs, which is `rows`
+        // order and what a US grant prints. The selection's two ends arrive in whatever
+        // order the drag went, so this cannot be left to the caller.
+        guard let ordered = AnswerContext.selection([claim2, p21, p19], in: patent) else {
+            log.fail("a selection of three real passages did not build a context")
+            return
+        }
+        log.equal(
+            ordered.passages.map(\.target), [p19, p21, claim2],
+            "a selection came out in something other than document order")
+
+        // A long drag crosses one paragraph several times; it is still one passage.
+        guard let deduped = AnswerContext.selection([p19, p19, p19], in: patent) else {
+            log.fail("a repeated target did not build a context")
+            return
+        }
+        log.equal(deduped.passages.count, 1, "a repeated target was carried twice")
+
+        // A target this patent does not contain is dropped rather than fabricated into a
+        // passage with no text.
+        let foreign = CitationTarget.paragraph(
+            ParagraphKey(patent: patent.key, number: 999_999))
+        guard let mixed = AnswerContext.selection([p19, foreign], in: patent) else {
+            log.fail("a selection with one real target did not build a context")
+            return
+        }
+        log.equal(mixed.passages.map(\.target), [p19], "a nonexistent target was carried")
+        log.check(
+            AnswerContext.selection([foreign], in: patent) == nil,
+            "a selection of nothing that exists built a context anyway")
+        log.check(
+            AnswerContext.selection([], in: patent) == nil,
+            "an empty selection built a context")
+
+        // The cap, which exists because a selection has no natural size — a drag with the
+        // scrollbar can cover the whole document.
+        let many = patent.sections.flatMap(\.paragraphs).filter { $0.number > 0 }.map {
+            CitationTarget.paragraph(ParagraphKey(patent: patent.key, number: $0.number))
+        }
+        log.check(many.count > 3, "the fixture has too few paragraphs to test the cap")
+        guard let capped = AnswerContext.selection(many, in: patent, maximum: 3) else {
+            log.fail("a capped selection did not build a context")
+            return
+        }
+        log.equal(capped.passages.count, 3, "the passage cap was not applied")
+
+        // A claim carries its printed number, because `copyText` puts it back — the office
+        // prints it, and a summary that cites `claim 2` should be shown claim 2 as a reader
+        // would see it.
+        guard let claimOnly = AnswerContext.selection([claim2], in: patent),
+            let shown = claimOnly.passages.first
+        else {
+            log.fail("a claim selection did not build a context")
+            return
+        }
+        log.check(
+            shown.text.hasPrefix("2. "),
+            "a claim's shown text lost its printed number")
+        log.equal(shown.label, "claim 2", "a claim's label is not the bare form")
+
+        // One patent in view, so citations are unqualified and nothing is cross-patent.
+        log.check(!ordered.isCrossPatent, "a selection in one patent reads as cross-patent")
+        log.check(
+            !ordered.isLexicalOnly,
+            "a summary claims a degraded search, and no search ran at all")
+        log.equal(ordered.purpose, .summary, "a selection context is not a summary")
+
+        // **Exactly the selected passages.** No independent claims unioned in — see the
+        // header, and `AnswerContext.selection`'s own comment for why.
+        log.equal(
+            ordered.retrieved, Set([p19, p21, claim2]),
+            "a summary's retrieved set is not exactly what was selected")
+        let independents = patent.claims.filter(\.isIndependent).map {
+            CitationTarget.claim(ClaimKey(patent: patent.key, number: $0.number))
+        }
+        log.check(!independents.isEmpty, "the fixture has no independent claims")
+        for claim in independents where claim != claim2 {
+            log.check(
+                !ordered.retrieved.contains(claim),
+                "an independent claim the reader did not select is in the retrieved set")
+        }
+        log.equal(
+            ordered.entries.first?.independentClaims.count, 0,
+            "a summary context carries independent claims, so the prompt will print them")
+
+        // The cache collision. Same passages, same question string, different purpose —
+        // and therefore a different prompt, so it must be a different cache entry.
+        var asQuestion = ordered
+        asQuestion.purpose = .question
+        log.check(
+            ordered.digest != asQuestion.digest,
+            "a summary and a question over the same passages share a cache key")
+    }
+
     private static func goldenPromptRender(_ log: Log) {
         guard let patent = parsed("US10123456B2") else {
             log.fail("could not load US10123456B2 for the golden render")
@@ -2182,6 +2776,50 @@ enum SelfTest {
         log.check(
             !rendered.contains("[0042] of US 10,123,456 B2"),
             "a single-patent prompt asks for the qualified form")
+
+        // MARK: The summary prompt
+
+        // Rendered from the same fixture's passages, so the only thing that can move it is
+        // `Prompts`. The three structural assertions are the ones that hold the design:
+        // a summary prompt asks no question, carries no claims block, and does not call its
+        // passages retrieved.
+        guard let selection = summaryContext(patent) else {
+            log.fail("the summary context did not build")
+            return
+        }
+        let summary = Prompts.summaryRequest(selection)
+        if summary != Self.goldenSummaryPrompt {
+            log.fail(
+                """
+                the golden summary render drifted. If the change was intended, bump \
+                Prompts.version and replace SelfTest.goldenSummaryPrompt with:
+                ----- begin -----
+                \(summary)
+                ----- end -----
+                """)
+        }
+        log.check(
+            !summary.contains("QUESTION:"),
+            "the summary prompt asks a question the reader never typed")
+        log.check(
+            !summary.contains("INDEPENDENT CLAIMS"),
+            "the summary prompt carries the independent claims block")
+        log.check(
+            !summary.contains("RETRIEVED PASSAGES"),
+            "the summary prompt calls its passages retrieved, and nothing was searched")
+        log.check(
+            summary.contains("PASSAGES TO SUMMARIZE"),
+            "the summary prompt does not name its passages")
+    }
+
+    /// The context the golden summary is rendered from — one paragraph and one claim, so the
+    /// render covers both label forms and `copyText`'s claim numbering.
+    private static func summaryContext(_ patent: Patent) -> AnswerContext? {
+        AnswerContext.selection(
+            [
+                .paragraph(ParagraphKey(patent: patent.key, number: 19)),
+                .claim(ClaimKey(patent: patent.key, number: 2)),
+            ], in: patent)
     }
 
     /// The context the golden prompt is rendered from. Deterministic: fixed passages, in
@@ -2229,6 +2867,21 @@ enum SelfTest {
         The method of claim 1, further comprising, using additive manufacturing techniques, forming a fill port and a vent port in the upper shell of the heat sink.
 
         Answer in 60-140 words. Every claim you make carries a citation, placed immediately after the clause it supports rather than at the end. Write a citation exactly as it is headed above: [0042], or claim 7. Cite only from the passages above — a paragraph that is not in that list does not exist for this answer. If those passages do not answer the question, say so in one sentence and cite nothing; that is a better answer than a cited guess.
+        """
+
+    /// Regenerated deliberately, the same way as `goldenPrompt`.
+    private static let goldenSummaryPrompt = """
+        PATENT: US 10,123,456 B2 — Phase change material heat sink using additive manufacturing and method
+
+        PASSAGES TO SUMMARIZE — these are the only things you may cite:
+
+        [0019]
+        As a result, the heat sink 100 is less expensive to produce and more robust than conventional heat sinks. Additive manufacturing also allows for the possibility to generate the lower and upper shells 102 and 104, as well as the internal matrix 106, with more complex designs to address specific issues such as dissipating heat from high power density components. Thus, the design of the internal matrix 106 is not limited to a metal foam or other design that can be formed using traditional machining techniques. For example, a complex internal matrix 106 may be designed to optimize heat transport, maximize volume allocated for phase change material, and provide suitable PCM filling paths. This design may be customized to provide the most efficient removal of heat from a particular application and to optimize heat transfer into the phase change material.
+
+        claim 2
+        2. The method of claim 1, further comprising, using additive manufacturing techniques, forming a fill port and a vent port in the upper shell of the heat sink.
+
+        Summarize the passages above in your own words, in at most 56 words, in the order they are printed. Say what they say and nothing else: no background, no significance, and nothing you know about the subject from anywhere but these passages. Every claim you make carries a citation, placed immediately after the clause it supports rather than at the end. Write a citation exactly as it is headed above: [0042], or claim 7.
         """
 
     // MARK: - Reading position and history
@@ -2402,9 +3055,11 @@ enum SelfTest {
     }
 
     private static func fakeContext(
-        question: String, retrieved: [CitationTarget], patents: [PatentKey]
+        question: String, retrieved: [CitationTarget], patents: [PatentKey],
+        purpose: AnswerContext.Purpose = .question
     ) -> AnswerContext {
         AnswerContext(
+            purpose: purpose,
             question: question,
             entries: patents.map {
                 AnswerContext.Entry(

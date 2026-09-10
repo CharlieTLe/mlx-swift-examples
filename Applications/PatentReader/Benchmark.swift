@@ -225,3 +225,145 @@ enum Benchmark {
         print(String(format: "peak memory %.2f GB", Double(peak) / 1_073_741_824))
     }
 }
+
+/// `--summarize --patent US10123456B2 --paragraph 19 --paragraph 20`, the summary path's
+/// terminal probe.
+///
+/// **What it cannot cover is the one thing it exists beside.** A summary starts from a
+/// `PDFSelection`, and a terminal has no drag — so the named passages stand in for what
+/// `PatentPDFMap.targets(spanning:)` would have resolved, and everything downstream of that
+/// is the real path: the same context builder, the same prompt, the same session, the same
+/// citation verdicts. The selection-to-passages leg is `--anchor`'s neighbour on the manual
+/// checklist for the same reason `--anchor` exists at all: `--selftest` is PDFKit-free by
+/// policy and there is no PDF in this repository.
+///
+/// With `--show-prompt` it prints the assembled prompt and its exact token count and stops,
+/// which is how a change to `Prompts.summaryRequest` gets read before it is generated from.
+@MainActor
+enum SummaryProbe {
+
+    static func run(options: AppOptions) async -> Bool {
+        let library = LibraryService()
+        library.load()
+
+        guard let spelling = options.patents.first,
+            let requested = PatentNumberParser.parse(spelling)
+        else {
+            print("--summarize needs a --patent")
+            return false
+        }
+        guard
+            let patent = library.patents.first(where: {
+                $0.key.country == requested.country && $0.key.serial == requested.serial
+            })
+        else {
+            print("\(requested.display) is not in the library — fetch it first with --fetch")
+            return false
+        }
+
+        let targets =
+            options.paragraphs.map {
+                CitationTarget.paragraph(ParagraphKey(patent: patent.key, number: $0))
+            }
+            + options.claims.map {
+                CitationTarget.claim(ClaimKey(patent: patent.key, number: $0))
+            }
+        guard !targets.isEmpty else {
+            print(
+                "--summarize needs a --paragraph or a --claim, which stands in for the "
+                    + "reader's selection")
+            return false
+        }
+
+        // The refusal the app makes, made here too: a summary with nothing citable under it
+        // is one nobody can check against the document.
+        guard let context = AnswerContext.selection(targets, in: patent) else {
+            print("none of those passages exist in \(patent.key.display)")
+            return false
+        }
+        let span =
+            Citation.spanLabel(
+                context.passages.map(\.target), numbering: patent.numbering) ?? "?"
+        print(
+            "\(patent.key.display) — summarizing \(context.passages.count) passage(s): \(span)")
+        if context.passages.count < targets.count {
+            // Said rather than silently dropped, which is the standing rule: a target that
+            // does not exist, and the cap, both land here.
+            print(
+                "  note: \(targets.count - context.passages.count) of \(targets.count) "
+                    + "requested passages were dropped (nonexistent, or over the "
+                    + "\(AnswerContext.maximumPassages)-passage cap)")
+        }
+
+        let service = AnswerService(
+            modelID: options.modelID ?? LLMRegistry.qwen3_4b_4bit.name,
+            greedy: options.greedy)
+        print("loading \(service.modelID)…")
+        await service.load()
+        guard service.isReady else {
+            print("the model did not load")
+            return false
+        }
+
+        let request = Prompts.summaryRequest(context)
+        if options.showPrompt {
+            print(String(repeating: "-", count: 78))
+            print(request)
+            print(String(repeating: "-", count: 78))
+            print("\(await service.promptTokenCount(for: request)) prompt tokens")
+            return true
+        }
+
+        var scanner = CitationScanner(context: context, library: library.patents)
+        var text = ""
+        let started = Date()
+        var timeToFirstToken: TimeInterval = 0
+        var promptTokens = 0
+        var decodeTokensPerSecond = 0.0
+        var ok = true
+
+        // `ignoringCache: true` so a second run measures the model rather than the disk.
+        for await event in await service.summarize(targets, in: patent, ignoringCache: true) {
+            switch event {
+            case .summarizing:
+                // The scanner is rebuilt against the service's own context, so what the
+                // verdicts are decided against is exactly what the model was shown.
+                if let live = service.context {
+                    scanner = CitationScanner(context: live, library: library.patents)
+                }
+            case .promptTokens(let count):
+                promptTokens = count
+            case .answer(let chunk):
+                if text.isEmpty { timeToFirstToken = Date().timeIntervalSince(started) }
+                text += chunk
+                scanner.consume(chunk)
+            case .stats(let stats):
+                decodeTokensPerSecond = stats.tokensPerSecond
+            case .unsupportedQuotes(let spans):
+                for span in spans { print("  unsupported quotation: \(span)") }
+            case .failed(let message):
+                print("  FAILED: \(message)")
+                ok = false
+            default:
+                break
+            }
+        }
+        scanner.finish()
+
+        print(String(repeating: "-", count: 78))
+        print(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        let tally = CitationCheck.tally(scanner.runs)
+        print(
+            String(
+                format: """
+
+                    %d prompt tok · %.2fs to first token · %.1f tok/s decode · %d words
+                    citations: %d supported · %d unretrieved · %d nonexistent
+                    """,
+                promptTokens, timeToFirstToken, decodeTokensPerSecond,
+                text.split(whereSeparator: \.isWhitespace).count,
+                tally[.supported]?.count ?? 0, tally[.unretrieved]?.count ?? 0,
+                tally[.nonexistent]?.count ?? 0))
+        return ok
+    }
+}

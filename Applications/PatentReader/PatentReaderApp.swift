@@ -53,6 +53,16 @@ struct AppOptions: Sendable {
     /// terminal: `--patent US10123456B2 --paragraph 42`.
     var paragraph: Int?
     var claim: Int?
+    /// Summarize the named passages and exit — the terminal stand-in for a selection, since
+    /// a drag is the one part of that path a terminal has none of. With `--show-prompt` it
+    /// prints the assembled summary prompt and stops.
+    var summarize = false
+    /// Every `--paragraph` and `--claim`, in the order given, for `--summarize`, which
+    /// stands in for a selection that can cover several passages. The two singular fields
+    /// above keep the *last* of each, which is what `--patent --paragraph` prints, so
+    /// nothing that reads them changes behaviour.
+    var paragraphs: [Int] = []
+    var claims: [Int] = []
 
     static func parse(_ arguments: [String]) -> AppOptions {
         var options = AppOptions()
@@ -65,13 +75,21 @@ struct AppOptions: Sendable {
             case "--benchmark": options.benchmark = true
             case "--greedy": options.greedy = true
             case "--diagnostics": options.diagnostics = true
+            case "--summarize": options.summarize = true
             case "--model": options.modelID = rest.next()
             case "--embedder": options.embedderID = rest.next()
             case "--patent": options.patents.append(rest.next() ?? "")
             case "--fetch": options.fetch.append(rest.next() ?? "")
-            case "--anchor": options.anchor.append(rest.next() ?? "")            case "--ask": options.questions.append(rest.next() ?? "")
-            case "--paragraph": options.paragraph = rest.next().flatMap(Int.init)
-            case "--claim": options.claim = rest.next().flatMap(Int.init)
+            case "--anchor": options.anchor.append(rest.next() ?? "")
+            case "--ask": options.questions.append(rest.next() ?? "")
+            case "--paragraph":
+                let number = rest.next().flatMap(Int.init)
+                options.paragraph = number
+                if let number { options.paragraphs.append(number) }
+            case "--claim":
+                let number = rest.next().flatMap(Int.init)
+                options.claim = number
+                if let number { options.claims.append(number) }
             default: break
             }
         }
@@ -79,7 +97,13 @@ struct AppOptions: Sendable {
     }
 
     /// Whether `--patent` was given with something to print.
-    var showsPassage: Bool { !patents.isEmpty && (paragraph != nil || claim != nil) }
+    ///
+    /// Not when `--summarize` is also set: there the paragraph names the passage to
+    /// summarize rather than one to print, and printing it first would bury the summary
+    /// under the whole passage.
+    var showsPassage: Bool {
+        !patents.isEmpty && (paragraph != nil || claim != nil) && !summarize
+    }
 }
 
 /// The one-line GPU check behind `--metal-check`.
@@ -155,17 +179,21 @@ enum EntryPoint {
                 dispatchMain()
             }
 
-            if options.showPrompt || options.benchmark {
+            if options.showPrompt || options.benchmark || options.summarize {
                 // The prompt dump needs the main actor (it drives `AnswerService`), so
                 // the main thread has to keep servicing it rather than block on a
                 // semaphore — that would deadlock against the main-actor executor.
                 // `dispatchMain()` parks the main thread on the main queue and never
                 // returns; the task exits the process itself.
                 Task {
-                    let ok =
-                        options.benchmark
-                        ? await Benchmark.run(options: options)
-                        : await PromptDump.run(options: options)
+                    let ok: Bool
+                    if options.summarize {
+                        ok = await SummaryProbe.run(options: options)
+                    } else if options.benchmark {
+                        ok = await Benchmark.run(options: options)
+                    } else {
+                        ok = await PromptDump.run(options: options)
+                    }
                     exit(ok ? 0 : 1)
                 }
                 dispatchMain()

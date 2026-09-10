@@ -106,11 +106,22 @@ struct ContentView: View {
     /// iOS overflow row, where there is no ⇧⌘C.
     @State private var copyRequest = 0
 
+    /// Bumped to summarize the reader's selection. ⇧⌘S's counterpart for the answer pane's
+    /// button and the iOS overflow row.
+    @State private var summarizeRequest = 0
+
+    /// The passages the current summary rests on, in document order.
+    ///
+    /// A summary's counterpart to `retrieved`, kept beside it rather than folded into it
+    /// because a `RetrievedChunk` carries scores a summary has none of. Both are cleared at
+    /// the start of every request, so one request's marks can never outlive it.
+    @State private var summarized: [CitationTarget] = []
+
     /// Whether there is a non-empty text selection in the open PDF.
     ///
     /// Reported up from `PatentPDFReaderView`, because the selection itself is a live
-    /// `PDFSelection` and belongs in the view layer. Two call sites: scoping a question, and
-    /// enabling the phone's copy row.
+    /// `PDFSelection` and belongs in the view layer. Three call sites: scoping a question,
+    /// enabling the phone's copy row, and enabling the pane's summarize button.
     @State private var hasOriginalSelection = false
 
     init(options: AppOptions) {
@@ -306,7 +317,12 @@ struct ContentView: View {
         guard let openPatent else { return .empty }
         return HighlightPlan.make(
             for: openPatent,
-            retrieved: retrieved.map(\.chunk.target),
+            // A summary's passages are evidence in exactly the sense `retrieved` means:
+            // things the model was shown. They arrive by a different route — the reader
+            // pointed at them instead of a search ranking them — and the marks make no
+            // distinction, so the reader sees which of what they selected the summary
+            // actually used.
+            retrieved: retrieved.map(\.chunk.target) + summarized,
             runs: runs + transcript.flatMap(\.runs),
             focus: focus)
     }
@@ -343,6 +359,8 @@ struct ContentView: View {
                 patent: patent, pdf: library.pdf, plan: highlightPlan,
                 findRequest: findRequest,
                 copyRequest: copyRequest,
+                summarizeRequest: summarizeRequest,
+                onSummarize: { startSummary($0, of: patent) },
                 onSelection: { hasOriginalSelection = $0 },
                 onCancel: { cancel() })
         } else {
@@ -361,9 +379,11 @@ struct ContentView: View {
                 transcript: transcript,
                 isBusy: isBusy,
                 isLexicalOnly: isLexicalOnly,
-                retrievedCount: retrieved.count,
+                retrievedCount: retrieved.count + summarized.count,
                 numbering: patent?.numbering ?? .printed,
                 focusRequest: askFieldFocusRequest,
+                canSummarize: hasOriginalSelection,
+                onSummarize: { summarizeRequest += 1 },
                 onAsk: ask)
             // Both go together: a divider with nothing under it would leave an empty band
             // at the foot of the pane.
@@ -479,6 +499,10 @@ struct ContentView: View {
                 // page — the system's gesture, which a reader already knows.
                 Button("Copy passage", systemImage: "doc.on.doc") { copyRequest += 1 }
                     .disabled(!hasOriginalSelection)
+                Button("Summarize selection", systemImage: "text.append") {
+                    summarizeRequest += 1
+                }
+                .disabled(!hasOriginalSelection)
                 Divider()
                 Toggle("Show diagnostics", isOn: $diagnosticsPreference)
             } label: {
@@ -778,7 +802,10 @@ struct ContentView: View {
             guard case .citation(let citation) = run, citation.verdict == .supported,
                 citation.target.patent == openPatent,
                 !HighlightPlan.isFrontMatter(citation.target),
-                map.selection(for: citation.target) == nil,
+                // `isPlaced` and not `selection(for:)`: a placement on a scanned page has no
+                // selection behind it, and asking for one would report every citation in the
+                // document as unlocatable when in fact 92% of them landed.
+                !map.isPlaced(citation.target),
                 seen.insert(citation.literal).inserted
             else { return nil }
             return citation.literal
@@ -1036,6 +1063,7 @@ struct ContentView: View {
         followUps = []
         transcript = []
         retrieved = []
+        summarized = []
         // The one-way half of `showsAnswerSheet`'s invariant: no answer, no sheet.
         showsAnswerSheet = false
         phase = .idle
@@ -1102,6 +1130,39 @@ struct ContentView: View {
         }
     }
 
+    /// A summary of the passages the reader selected in the document.
+    ///
+    /// `start`'s sibling, and the differences are the two things a summary does not have. It
+    /// does not search — the reader pointed, so there is nothing to rank and no embedder to
+    /// wait for — and it has no typed question, so what goes in the header is the range it
+    /// actually summarized rather than words nobody said. `Citation.spanLabel` is what names
+    /// that range, and it is the same rule the copied quotation's trailer follows, so the two
+    /// cannot describe one selection differently.
+    ///
+    /// Everything after this is an answer's: the scanner, the links, the marks, the cache and
+    /// the follow-ups all run unchanged, which is the whole reason a summary is an exchange
+    /// in this transcript rather than a panel of its own.
+    private func startSummary(_ targets: [CitationTarget], of patent: Patent) {
+        guard !isBusy, service.isReady, !targets.isEmpty else { return }
+
+        clearAnswer()
+        question =
+            Citation.spanLabel(targets, numbering: patent.numbering)
+            .map { "Summary of \($0)" } ?? "Summary of the selection"
+        showsAnswerSheet = true
+        showsAnswers = true
+
+        let started = Date()
+        Task {
+            for await event in await service.summarize(targets, in: patent) {
+                consume(event, into: nil, started: started)
+            }
+            scanner?.finish()
+            if let scanner { runs = scanner.runs }
+            tail = ""
+        }
+    }
+
     private func followUp(_ text: String) {
         let index = transcript.count
         transcript.append(.init(question: text, runs: [], tail: ""))
@@ -1142,6 +1203,12 @@ struct ContentView: View {
         case .retrieved(let chunks):
             retrieved = chunks
             isLexicalOnly = service.context?.isLexicalOnly ?? false
+        case .summarizing(let targets):
+            summarized = targets
+            // Never true for a summary — nothing was searched, so no search was degraded —
+            // and set rather than left alone so a summary after a lexical-only answer does
+            // not inherit its caption.
+            isLexicalOnly = false
         case .promptTokens(let count):
             promptTokens = count
         case .answer(let chunk):

@@ -39,7 +39,20 @@ enum Prompts {
     /// independent claims) then the question and the retrieved passages, so a per-library
     /// prefix cache becomes possible later without rewriting anything. The citation
     /// contract is the closing line.
-    static let version = 1
+    ///
+    /// Adding `summaryRequest` did **not** bump this to 2, and the rule above is the reason
+    /// rather than something it is an exception to. The version guards cached *output* —
+    /// `CachedAnswer` records the version it was generated under and a hit requires a match
+    /// — and no string that any existing prompt renders changed, so every cached answer on
+    /// every reader's disk was still exactly what that prompt would produce.
+    ///
+    /// 2: the summary's length became a scaled ceiling rather than a flat 60-140 floor, for
+    /// the reason `summaryClosing` gives at length. This *did* bump, and it invalidates
+    /// cached answers as well as cached summaries even though the answering prompt is
+    /// byte-identical — which is the coarseness of a per-file version, accepted rather than
+    /// worked around. A second counter per prompt is a second thing to forget to bump, and
+    /// the cost here is one regeneration of answers a reader has already read.
+    static let version = 2
 
     // MARK: - Answering
 
@@ -141,6 +154,80 @@ enum Prompts {
             does not exist for this answer. If those passages do not answer the \
             question, say so in one sentence and cite nothing; that is a better answer \
             than a cited guess.
+            """
+    }
+
+    // MARK: - Summarizing
+
+    /// The assembled request for a summary of the passages the reader selected.
+    ///
+    /// Three differences from `answerRequest`, each of which is `AnswerContext.selection`'s
+    /// argument arriving in the prompt:
+    ///
+    /// - **No `QUESTION:` line.** The reader pointed rather than asked, and a question
+    ///   invented on their behalf is how a summary quietly becomes an answer to something
+    ///   nobody wanted to know.
+    /// - **No independent claims block.** The reader named the subject; the claims are not
+    ///   it. See `AnswerContext.selection` for the whole argument, including what it saves.
+    /// - **`PASSAGES TO SUMMARIZE`, not `RETRIEVED PASSAGES`.** Nothing was searched and
+    ///   nothing was retrieved, and this would otherwise be the one place in the prompt
+    ///   where the app describes its own behaviour untruthfully.
+    ///
+    /// `answererInstructions` is reused unchanged, and that is a decision rather than an
+    /// omission. This file's first finding is that rules at the end bind and rules in the
+    /// instructions do not, so the closing block below is what does the work; a second
+    /// system block restating the citation contract would be two copies of one rule, which
+    /// is precisely how two copies of a rule come apart.
+    static func summaryRequest(_ context: AnswerContext) -> String {
+        var blocks: [String] = []
+
+        if let entry = context.entries.first {
+            blocks.append("PATENT: \(entry.key.display) — \(entry.title)")
+        }
+
+        let passages = context.passages.map { "\($0.label)\n\($0.text)" }
+        blocks.append(
+            (["PASSAGES TO SUMMARIZE — these are the only things you may cite:"] + passages)
+                .joined(separator: "\n\n"))
+
+        blocks.append(summaryClosing(context))
+        return blocks.joined(separator: "\n\n")
+    }
+
+    /// The summary's last line, for `closing`'s reason: the last thing read before writing
+    /// is the thing that binds.
+    ///
+    /// **The length is a ceiling and scales with the selection, and that is measured rather
+    /// than chosen.** `closing`'s flat 60-140 is right for a question, where how long an
+    /// answer runs is independent of how much was retrieved. It is wrong here, and wrong in
+    /// a way that produces the worst output this path has: asked to summarize two
+    /// one-sentence paragraphs and one claim — about 230 words, under a 60-word floor — the
+    /// model returned the three passages copied out verbatim behind their own citation
+    /// labels. 186 words of transcription, three `.supported` citations, and it reads exactly
+    /// like a summary. That is this file's third finding arriving somewhere new: a floor makes
+    /// the model leave the passage to meet it, and where there is nowhere to go it pads with
+    /// the passage itself.
+    ///
+    /// So there is no floor at all, and the ceiling is a third of the source's own length
+    /// capped at 140. A summary that comes out shorter than some minimum is a summary of a
+    /// short selection, which is the correct response to one.
+    ///
+    /// The other rule here guards the same failure from the other side. "In your own words"
+    /// is positive, per this file's second finding — a ban on copying is cheap to satisfy by
+    /// paraphrasing one word per sentence.
+    private static func summaryClosing(_ context: AnswerContext) -> String {
+        let source = context.passages.reduce(0) {
+            $0 + $1.text.split(whereSeparator: \.isWhitespace).count
+        }
+        let limit = min(140, max(30, source / 3))
+
+        return """
+            Summarize the passages above in your own words, in at most \(limit) words, in \
+            the order they are printed. Say what they say and nothing else: no background, \
+            no significance, and nothing you know about the subject from anywhere but these \
+            passages. Every claim you make carries a citation, placed immediately after the \
+            clause it supports rather than at the end. Write a citation exactly as it is \
+            headed above: [0042], or claim 7.
             """
     }
 

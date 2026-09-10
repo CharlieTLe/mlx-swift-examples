@@ -28,6 +28,9 @@ import SwiftUI
 /// - **⌘C** is PDFKit's own, and copies the selected text uncited. Left alone deliberately:
 ///   ⌘C is what a reader presses to copy the phrase they just dragged out, and ⇧⌘C is the
 ///   one that means "with the citation".
+/// - **⇧⌘S** summarizes the selection, through the same `targets(spanning:)` resolution ⇧⌘C
+///   uses. It is the one selection action that refuses when nothing can be placed, because a
+///   summary this app cannot cite is one nobody can check — see `summarizeSelection()`.
 /// - **Arrows, space, page up and down** are PDFKit's scrolling, which is why there is no
 ///   `.focusable()` on the host below: `PDFView`'s document view takes first responder
 ///   itself, and a SwiftUI focus item over it would compete for the keys.
@@ -56,6 +59,20 @@ struct PatentPDFReaderView: View {
 
     /// ⇧⌘C's counterpart for a phone, where there is no ⇧⌘C. Same counter idiom.
     let copyRequest: Int
+
+    /// ⇧⌘S's counterpart, and the answer pane's button. Same counter idiom.
+    let summarizeRequest: Int
+
+    /// The passages the reader's selection covers, handed up when they ask for a summary.
+    ///
+    /// **Values, and never the `PDFSelection`.** The rule `onSelection` states — that a live
+    /// reference into a `PDFDocument` has no business leaving the view layer — is why this
+    /// resolves the selection here and passes out `CitationTarget`s, which are addresses
+    /// rather than references. It is also why this is pulled at the moment the reader asks
+    /// rather than pushed on every selection change: `targets(spanning:)` is two binary
+    /// searches, cheap enough to run per drag and pointless to, since nothing above needs the
+    /// answer until the button is pressed.
+    let onSummarize: ([CitationTarget]) -> Void
 
     /// Whether the reader has text selected here, reported upward on every transition.
     ///
@@ -181,6 +198,7 @@ struct PatentPDFReaderView: View {
         .task(id: bandRequest) { await raiseBand() }
         .onChange(of: findRequest) { startFinding() }
         .onChange(of: copyRequest) { copyPassage() }
+        .onChange(of: summarizeRequest) { summarizeSelection() }
         .background { shortcuts }
     }
 
@@ -228,6 +246,48 @@ struct PatentPDFReaderView: View {
         }
         copyToPasteboard(Citation.quotation(patent, text: text, targets: targets))
         reportImplausibleSpan(targets, for: text)
+    }
+
+    /// ⇧⌘S, and the answer pane's button: summarize what the reader selected.
+    ///
+    /// The same two legs as `copyPassage`, for the same reason and in the same order, and
+    /// then the two part company on what they do with nothing. A quotation with no citation
+    /// is still a quotation, so `copyPassage` copies it and says it could not place it. A
+    /// summary with no citation is a summary nobody can check against the document, and
+    /// making that check cheap — one click to the passage in the office's own PDF — is what
+    /// this app is for. So this **refuses**, and the band says why.
+    ///
+    /// What is handed up is the passages, not the characters: see `AnswerContext.selection`
+    /// for that argument, which is the whole design of the feature. The consequence here is
+    /// that this needs no `text` beyond deciding whether anything is selected at all and
+    /// feeding the implausible-span check.
+    private func summarizeSelection() {
+        guard let document, let selection = selected.selection else { return }
+        let text = selection.string ?? ""
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        var targets = map?.targets(spanning: selection, in: document) ?? []
+        if targets.isEmpty,
+            let recovered = PassageAnchors.target(containing: text, in: patent)
+        {
+            targets = [recovered]
+        }
+        guard !targets.isEmpty else {
+            band =
+                "That selection could not be placed in any passage of this patent, so "
+                + "there is nothing to summarize that could be cited. A cover page, a "
+                + "figure caption or a table falls outside every passage there is."
+            return
+        }
+
+        // Warned about and then summarized anyway, which is the opposite of `copyPassage`'s
+        // exposure to the same defect. A scrambled *copy* reads scrambled; a summary is built
+        // from the parse, which is in document order whatever order PDFKit walked the
+        // columns in, so the scramble cannot reach the model. All it can do is make the
+        // passage set wider than the reader meant, and the header names the range so they
+        // can see that it did.
+        reportImplausibleSpan(targets, for: text)
+        onSummarize(targets)
     }
 
     /// **Two-column selection is PDFKit's to get wrong**, and this is where it shows.
@@ -326,6 +386,8 @@ struct PatentPDFReaderView: View {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
             Button("Copy passage with citation") { copyPassage() }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("Summarize selection") { summarizeSelection() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
             Button("Cancel") { escape() }
                 .keyboardShortcut(.escape, modifiers: [])
         }
@@ -354,7 +416,13 @@ struct PatentPDFReaderView: View {
         self.map = map
         // The query survives the switch and the matches cannot — see `PatentPDFFind.refind`.
         find.refind(in: document)
-        await map.build(in: document)
+        // A scan has to be read before it can be anchored, and that is 38 seconds the first
+        // time for a 161-page grant. Before `build`, not in parallel with it: the map's whole
+        // algorithm is a search over the document's text, and there is nothing to search until
+        // this returns. `nil` for every document with a text layer of its own, which is all of
+        // them but the scans.
+        let scanned = await pdf.recognisedText(for: patent, in: document)
+        await map.build(in: document, scanned: scanned)
     }
 
     /// Whether an open document is the one at this URL. `PDFDocument` keeps the URL it was
@@ -393,8 +461,10 @@ struct PatentPDFReaderView: View {
     /// and restarted by the next jump, so a band never outlives the jump that raised it.
     private func raiseBand() async {
         band = nil
-        guard let map, map.isBuilt, let focus = plan.focus,
-            map.selection(for: focus.target) == nil
+        // `isPlaced` and not `selection(for:)`: on a scan every placement has a `nil`
+        // selection, and asking for one would raise this band over a document where anchoring
+        // in fact worked.
+        guard let map, map.isBuilt, let focus = plan.focus, !map.isPlaced(focus.target)
         else { return }
 
         let label = Citation.chipLabel(focus.target, numbering: patent.numbering)
@@ -633,17 +703,34 @@ struct PatentPDFView {
         if let refinement = focus.refinement,
             let narrowed = map.refine(refinement, within: focus.target, in: document)
         {
-            view.go(to: narrowed)
+            go(to: narrowed, in: view)
             return
         }
-        if let selection = map.selection(for: focus.target) {
-            view.go(to: selection)
+        if let region = map.focus(of: focus.target, in: document) {
+            go(to: region, in: view)
             return
         }
         guard let near = map.nearestPlaced(to: focus.target),
-            let selection = map.selection(for: near)
+            let region = map.focus(of: near, in: document)
         else { return }
-        view.go(to: selection)
+        go(to: region, in: view)
+    }
+
+    /// Scrolls a passage into view, by whichever handle it has.
+    ///
+    /// A selection where the document has text, because `go(to: PDFSelection)` is the call that
+    /// scrolls without selecting. A rect where it does not — a scanned page carries no
+    /// selectable text, so the recognised line's own rectangle is the only handle there is, and
+    /// `go(to:on:)` scrolls to it without touching the selection either.
+    private func go(to region: PassageRegion, in view: PDFView) {
+        if let selection = region.selection {
+            view.go(to: selection)
+            return
+        }
+        guard let first = region.lines.first, let rect = first.rects.first,
+            let page = document.page(at: first.page)
+        else { return }
+        view.go(to: rect, on: page)
     }
 
     /// Points the coordinator at *this* instance's closures, on every update, so what they
